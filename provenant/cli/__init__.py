@@ -6,4 +6,9 @@ git signals, dead code detection, architectural decisions, and
 AI-generated documentation.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _version, PackageNotFoundError as _PackageNotFoundError
+
+try:
+    __version__ = _version("provenant")
+except _PackageNotFoundError:
+    __version__ = "0.0.0"

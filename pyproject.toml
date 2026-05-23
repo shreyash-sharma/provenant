@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenant"
-version = "0.1.1"
+version = "0.1.2"
 description = "Proof-aware codebase intelligence - smarter context, fewer tokens"
 requires-python = ">=3.11"
 license = "MIT"
@@ -74,6 +74,9 @@ provenant-augment = "provenant.cli.augment_hook:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["provenant*"]
+
+[tool.setuptools.package-data]
+provenant = ["server/static/**/*", "server/static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

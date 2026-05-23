@@ -23,6 +23,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 _WEB_CACHE_DIR = Path.home() / ".provenant" / "web"
+# Bundled static files shipped inside the wheel (always available after pip install)
+_BUNDLED_WEB_DIR = Path(__file__).parent / "static"
+
+
+def _web_dir() -> Path | None:
+    """Return the best available web UI directory: bundled > cached download."""
+    if (_BUNDLED_WEB_DIR / "index.html").exists():
+        return _BUNDLED_WEB_DIR
+    if (_WEB_CACHE_DIR / "index.html").exists():
+        return _WEB_CACHE_DIR
+    return None
 
 
 async def _init_state(repo_path: str) -> None:
@@ -779,28 +790,27 @@ def create_app() -> FastAPI:
             raise _as_http_error(exc) from exc
 
     # ── Static web UI (Node-free) ────────────────────────────────────────────
-    # `provenant serve` copies the Next.js static export into _WEB_CACHE_DIR.
-    # We mount /_next for hashed JS/CSS bundles, then a catch-all SPA handler
-    # returns the pre-built HTML for every non-API route.  If the cache dir
-    # doesn't exist yet the server starts fine — only /api/* routes are live.
+    # Prefer bundled static files (shipped in the wheel under server/static/).
+    # Falls back to ~/ .provenant/web/ if someone downloaded a newer UI.
 
-    _next_dir = _WEB_CACHE_DIR / "_next"
-    if _next_dir.exists():
-        app.mount("/_next", StaticFiles(directory=str(_next_dir)), name="next-assets")
+    _active_web = _web_dir()
+    if _active_web:
+        _next_dir = _active_web / "_next"
+        if _next_dir.exists():
+            app.mount("/_next", StaticFiles(directory=str(_next_dir)), name="next-assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str) -> FileResponse:
-        web = _WEB_CACHE_DIR
-        if not web.exists():
+        web = _web_dir()
+        if not web:
             raise HTTPException(
                 status_code=503,
-                detail="Web UI not built yet. Run `provenant serve` to build it.",
+                detail="Web UI not available. Reinstall: pip install --upgrade provenant",
             )
-        # Next.js export writes /knowledge → knowledge.html (no trailing slash)
         for candidate in (
-            web / f"{full_path}.html",        # /knowledge → knowledge.html
-            web / full_path / "index.html",   # /knowledge/ → knowledge/index.html
-            web / "index.html",               # SPA root fallback
+            web / f"{full_path}.html",
+            web / full_path / "index.html",
+            web / "index.html",
         ):
             if candidate.is_file():
                 return FileResponse(str(candidate))
