@@ -1,0 +1,240 @@
+"""Shared persistence logic for pipeline results.
+
+Extracted from ``cli/commands/init_cmd.py`` so both the CLI and the server
+can persist a ``PipelineResult`` without duplicating the upsert recipe.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+from typing import Any
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+async def persist_graph_nodes(
+    session: Any,
+    repo_id: str,
+    graph_builder: Any,
+    ep_scores: dict[str, float] | None = None,
+) -> None:
+    """Persist file- and symbol-level graph nodes with full centrality metrics.
+
+    Lifted out of :func:`persist_pipeline_result` so the incremental
+    update path can refresh ``graph_nodes`` (including symbol-level
+    PageRank / betweenness) without constructing a full ``PipelineResult``.
+    """
+    from provenant.core.persistence import batch_upsert_graph_nodes
+
+    graph = graph_builder.graph()
+    pr = graph_builder.pagerank()
+    bc = graph_builder.betweenness_centrality()
+    sym_pr = graph_builder.symbol_pagerank()
+    sym_bc = graph_builder.symbol_betweenness_centrality()
+    cd = graph_builder.community_detection()
+    sc = graph_builder.symbol_communities()
+    ci = graph_builder.community_info()
+    ep_scores = ep_scores or {}
+
+    nodes = []
+    for node_id in graph.nodes:
+        data = graph.nodes[node_id]
+        node_type = data.get("node_type", "file")
+
+        node_dict: dict[str, Any] = {
+            "node_id": node_id,
+            "node_type": node_type,
+            "language": data.get("language", "unknown"),
+            "symbol_count": data.get("symbol_count", 0),
+            "has_error": data.get("has_error", False),
+            "is_test": data.get("is_test", False),
+            "is_entry_point": data.get("is_entry_point", False),
+            # Files draw from the file-level metric tables; symbols fall
+            # back to the symbol subgraph (calls + heritage) so that the
+            # per-symbol UI panel shows real centrality instead of 0.
+            "pagerank": pr.get(node_id, sym_pr.get(node_id, 0.0)),
+            "betweenness": bc.get(node_id, sym_bc.get(node_id, 0.0)),
+            "community_id": cd.get(node_id, 0),
+        }
+
+        community_meta: dict[str, Any] = {}
+        if node_type == "file":
+            cid = cd.get(node_id, 0)
+            comm_info = ci.get(cid)
+            if comm_info:
+                community_meta = {
+                    "label": comm_info.label,
+                    "cohesion": comm_info.cohesion,
+                }
+        elif node_type == "symbol":
+            sym_cid = sc.get(node_id)
+            if sym_cid is not None:
+                community_meta = {"symbol_community_id": sym_cid}
+            if node_id in ep_scores:
+                community_meta["entry_point_score"] = ep_scores[node_id]
+        node_dict["community_meta_json"] = json.dumps(community_meta)
+
+        if node_type == "symbol":
+            node_dict.update(
+                {
+                    "kind": data.get("kind"),
+                    "name": data.get("name"),
+                    "qualified_name": data.get("qualified_name"),
+                    "file_path": data.get("file_path"),
+                    "start_line": data.get("start_line"),
+                    "end_line": data.get("end_line"),
+                    "visibility": data.get("visibility"),
+                    "signature": data.get("signature"),
+                    "parent_symbol_id": data.get("parent_name"),
+                }
+            )
+        nodes.append(node_dict)
+
+    if nodes:
+        await batch_upsert_graph_nodes(session, repo_id, nodes)
+
+
+async def persist_pipeline_result(
+    result: Any,
+    session: Any,
+    repo_id: str,
+) -> None:
+    """Persist all outputs from a :class:`PipelineResult` into the database.
+
+    Parameters
+    ----------
+    result:
+        A ``PipelineResult`` from ``run_pipeline()``.
+    session:
+        An active SQLAlchemy ``AsyncSession`` (caller manages commit/rollback).
+    repo_id:
+        The repository ID to associate all records with.
+
+    Note
+    ----
+    FTS indexing is intentionally excluded here - callers must do it after
+    this session closes to avoid SQLite write-lock conflicts.
+
+    This function mutates ``sym.file_path`` on parsed-file symbols that
+    lack one.  Callers should treat *result* as consumed after this call.
+    """
+    from provenant.core.persistence import (
+        batch_upsert_graph_edges,
+        batch_upsert_graph_nodes,
+        batch_upsert_symbols,
+        upsert_page_from_generated,
+    )
+    from provenant.core.persistence.crud import (
+        bulk_upsert_decisions,
+        recompute_decision_staleness,
+        save_dead_code_findings,
+        upsert_git_metadata_bulk,
+    )
+
+    # ---- Pages (if generated) -----------------------------------------------
+    if result.generated_pages:
+        for page in result.generated_pages:
+            await upsert_page_from_generated(session, page, repo_id)
+
+    # ---- Graph nodes ---------------------------------------------------------
+    ep_scores: dict[str, float] = {}
+    if result.execution_flow_report and getattr(result.execution_flow_report, "flows", None):
+        ep_scores = {
+            f.entry_point_id: f.entry_point_score
+            for f in result.execution_flow_report.flows
+            if hasattr(f, "entry_point_id") and hasattr(f, "entry_point_score")
+        }
+    await persist_graph_nodes(session, repo_id, result.graph_builder, ep_scores)
+
+    # ---- Graph edges ---------------------------------------------------------
+    graph = result.graph_builder.graph()
+    edges = []
+    for u, v, data in graph.edges(data=True):
+        edges.append(
+            {
+                "source_node_id": u,
+                "target_node_id": v,
+                "imported_names_json": json.dumps(data.get("imported_names", [])),
+                "edge_type": data.get("edge_type", "imports"),
+                "confidence": data.get("confidence", 1.0),
+            }
+        )
+    if edges:
+        await batch_upsert_graph_edges(session, repo_id, edges)
+
+    # ---- Symbols -------------------------------------------------------------
+    # NOTE: This mutates sym.file_path on the caller's PipelineResult objects.
+    # The guard prevents double-set on retries, but callers should treat the
+    # result as consumed after this call.
+    all_symbols = []
+    for pf in result.parsed_files:
+        for sym in pf.symbols:
+            if not getattr(sym, "file_path", None):
+                sym.file_path = pf.file_info.path
+            all_symbols.append(sym)
+    if all_symbols:
+        await batch_upsert_symbols(session, repo_id, all_symbols)
+
+    # ---- Security scan -------------------------------------------------------
+    # Choice: persist.py (rather than orchestrator.py) because there is already
+    # a clear per-file loop over parsed_files here, and the instructions ask for
+    # a minimal, non-invasive addition.  The orchestrator parse stage is owned
+    # by another agent and must not be touched.
+    try:
+        from provenant.core.analysis.security_scan import SecurityScanner
+
+        scanner = SecurityScanner(session, repo_id)
+        for pf in result.parsed_files:
+            source_text = getattr(pf.file_info, "content", "") or ""
+            findings = await scanner.scan_file(
+                pf.file_info.path, source_text, pf.symbols
+            )
+            if findings:
+                await scanner.persist(pf.file_info.path, findings)
+    except Exception as _sec_err:  # noqa: BLE001 - scanner must never break the pipeline
+        logger.warning("security_scan_skipped", error=str(_sec_err))
+
+    # ---- Git metadata --------------------------------------------------------
+    if result.git_metadata_list:
+        await upsert_git_metadata_bulk(session, repo_id, result.git_metadata_list)
+
+    # ---- Dead code findings --------------------------------------------------
+    if result.dead_code_report and result.dead_code_report.findings:
+        await save_dead_code_findings(session, repo_id, result.dead_code_report.findings)
+
+    # ---- Decision records ----------------------------------------------------
+    if result.decision_report and result.decision_report.decisions:
+        await bulk_upsert_decisions(
+            session,
+            repo_id,
+            [dataclasses.asdict(d) for d in result.decision_report.decisions],
+        )
+        # Recompute staleness scores using git metadata.
+        if result.git_metadata_list:
+            try:
+                git_meta_map: dict[str, dict] = {}
+                for gm in result.git_metadata_list:
+                    gm_dict = gm if isinstance(gm, dict) else dataclasses.asdict(gm)
+                    fp = gm_dict.get("file_path", "")
+                    if fp:
+                        git_meta_map[fp] = gm_dict
+                if git_meta_map:
+                    updated = await recompute_decision_staleness(
+                        session, repo_id, git_meta_map
+                    )
+                    if updated:
+                        logger.info("decision_staleness_recomputed", updated=updated)
+            except Exception as _stale_err:
+                logger.debug("staleness_scoring_skipped", error=str(_stale_err))
+
+    logger.info(
+        "pipeline_result_persisted",
+        repo_id=repo_id,
+        pages=len(result.generated_pages) if result.generated_pages else 0,
+        graph_nodes=result.graph_builder.graph().number_of_nodes(),
+        symbols=len(all_symbols),
+        git_files=len(result.git_metadata_list),
+    )

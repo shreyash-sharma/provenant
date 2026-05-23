@@ -1,0 +1,42 @@
+Create a Provenant architecture page for `{{ ctx.repo_name }}`.
+
+Return Markdown and include exactly one fenced Mermaid `graph TD` block. Use
+short readable labels in the diagram and explain the major clusters below it.
+
+### Candidate nodes
+{% for node in ctx.nodes %}
+- `{{ node }}`
+{% endfor %}
+
+### Candidate edges
+{% for src, dst in ctx.edges %}
+- `{{ src }}` -> `{{ dst }}`
+{% endfor %}
+
+### Communities
+{% for community_id, members in ctx.communities.items() %}
+- Community {{ community_id }}: {{ members | join(", ") }}
+{% endfor %}
+
+### Strongly connected groups
+{% if ctx.scc_groups %}
+{% for scc in ctx.scc_groups %}
+- {{ scc | join(", ") }}
+{% endfor %}
+{% else %}
+- No strongly connected groups were provided.
+{% endif %}
+
+The node list is intentionally capped at {{ ctx.nodes | length }} high-signal files by PageRank.
+
+---
+Write the architecture page now.
+
+**Synthesis rules:**
+1. **Mermaid diagram** — REQUIRED. Use `graph TD`. Create one `subgraph` block per community from the communities list above. Inside each subgraph, place the nodes that belong to that community using short aliases (under 15 chars, no spaces). Show edges between nodes from the edges list. Limit to the top ~15 most connected nodes if the list is large — prefer nodes that appear in many edges.
+2. **## Key Observations** — exactly 3 bullets after the diagram:
+   - Which node or entry point has the highest fan-out (most outgoing edges) — name it
+   - Which subgraph/community is most tightly coupled internally (most intra-cluster edges) — name it
+   - Which nodes or subgraphs are most isolated (few edges to other clusters) — name them and explain if this is intentional (utility libraries) or suspicious (orphaned modules)
+3. Do not invent edges or nodes not present in the data above.
+

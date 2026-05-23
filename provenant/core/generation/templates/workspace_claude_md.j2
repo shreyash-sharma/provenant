@@ -1,0 +1,82 @@
+## Provenant Workspace Context: {{ data.workspace_name }}
+
+This workspace contains {{ data.repos|length }} indexed repo{{ "s" if data.repos|length != 1 else "" }}.
+Use `repo="all"` for workspace-level questions, or pass `repo="alias"` to scope
+MCP calls to one repository.
+
+### Repositories
+| Repo | Files | Symbols | Hotspots | Role |
+|------|-------|---------|----------|------|
+{% for r in data.repos %}
+| `{{ r.alias }}` | {{ r.file_count }} | {{ r.symbol_count }} | {{ r.hotspot_count }} | {{ "default" if r.alias == data.default_repo else ("primary" if r.is_primary else "") }} |
+{% endfor %}
+
+{% if data.contract_links %}
+### Cross-Repo API Contracts
+{% if data.contracts_by_type %}
+Contract types: {% for ctype, count in data.contracts_by_type.items() %}{{ ctype }}={{ count }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+{% endif %}
+| Provider | Consumer | Type | Contract |
+|----------|----------|------|----------|
+{% for link in data.contract_links %}
+| `{{ link.provider_repo }}:{{ link.provider_file }}` | `{{ link.consumer_repo }}:{{ link.consumer_file }}` | {{ link.contract_type }} | `{{ link.contract_id }}` |
+{% endfor %}
+{% endif %}
+
+{% if data.co_changes %}
+### Cross-Repo Co-Changes
+Review both sides when changing files that frequently move together.
+
+| Source | Target | Co-changes |
+|--------|--------|------------|
+{% for cc in data.co_changes[:10] %}
+| `{{ cc.source_repo }}:{{ cc.source_file }}` | `{{ cc.target_repo }}:{{ cc.target_file }}` | {{ cc.frequency }} |
+{% endfor %}
+{% endif %}
+
+{% if data.package_deps %}
+### Package Dependencies
+{% for dep in data.package_deps %}
+- `{{ dep.source_repo }}` -> `{{ dep.target_repo }}` ({{ dep.kind }})
+{% endfor %}
+{% endif %}
+
+### Entry Points by Repo
+{% for r in data.repos %}
+#### `{{ r.alias }}`{% if r.alias == data.default_repo %} (default){% elif r.is_primary %} (primary){% endif %}
+{% if r.entry_points %}
+{% for ep in r.entry_points %}
+- `{{ ep }}`
+{% endfor %}
+{% else %}
+- No indexed entry points.
+{% endif %}
+{% endfor %}
+
+### MCP Workflow
+
+Use Provenant tools for orientation, discovery, risk, and architecture context.
+Tool output is an index snapshot; verify source before editing.
+
+1. Start new tasks with `provenant_overview()`.
+2. Use `provenant_search(query="...")` when locating concepts across repos.
+3. Use `provenant_context(targets=["path/to/file"], repo="alias")` for file context.
+4. Use `provenant_risk(targets=["path/to/file"], repo="alias")` before hotspot edits.
+5. Use `provenant_why(query="...")` before architectural changes.
+6. Use `provenant_deps(source="...", target="...")` to trace connections.
+7. Use `provenant_dead_code()` before cleanup or removal work.
+8. Record major decisions with `provenant_decisions(action="create", ...)`.
+9. Use `provenant_diagram(scope="...")` for diagrams.
+
+| Tool | Use |
+|------|-----|
+| `provenant_overview()` | Workspace or repo orientation |
+| `provenant_context(targets=[...])` | File or symbol context |
+| `provenant_risk(targets=[...])` | Hotspot and change-risk checks |
+| `provenant_why(query="...")` | Decision and rationale lookup |
+| `provenant_decisions(action=...)` | Decision record maintenance |
+| `provenant_search(query="...")` | Concept and symbol discovery |
+| `provenant_deps(source=..., target=...)` | Relationship tracing |
+| `provenant_dead_code()` | Cleanup planning |
+| `provenant_diagram(scope=...)` | Architecture visualization |

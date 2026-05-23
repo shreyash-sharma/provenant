@@ -1,0 +1,41 @@
+Create a Provenant cycle-analysis page for SCC `{{ ctx.scc_id }}`.
+
+Explain what forms the cycle, why it matters, and realistic ways to reduce it.
+Return Markdown with `## Cycle Description`, `## Files Involved`,
+`## Why This Exists`, and `## Refactoring Suggestions`.
+
+### Detected cycle
+{{ ctx.cycle_description }}
+
+### Files
+{% for f in ctx.files %}
+- `{{ f }}`
+{% endfor %}
+
+### Edges that close the cycle
+{% for ci in ctx.cross_imports %}
+- `{{ ci.from }}` imports `{{ ci.to }}`
+{% endfor %}
+
+### Symbols inside the cycle
+{% for member in ctx.member_symbols %}
+{% if member.symbols %}
+`{{ member.file_path }}`:
+{% for sym in member.symbols %}
+- `{{ sym.signature }}`{% if sym.docstring %}: {{ sym.docstring }}{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+### Size
+- Total symbols: {{ ctx.total_symbols }}
+
+---
+Write the cycle-analysis page now.
+
+**Synthesis rules:**
+1. **## The Cycle** — visualize as `A → B → C → A` using the actual file names. Then state in one sentence what shared concept or resource is the reason all these files need each other.
+2. **## Root Cause** — pick the most likely cause from: (a) shared mutable state both sides need, (b) a layering violation where a lower layer imported a higher one, (c) a utility that grew into a business logic file, (d) feature creep that added dependencies over time. Cite the specific imports that form the cycle to support your diagnosis.
+3. **## Business Impact** — what concrete problems does this cycle cause? Pick the most relevant: slow build times from recompilation cascades, test isolation failures, initialization order bugs, IDE analysis timeouts, hard-to-mock test dependencies.
+4. **## Refactoring Roadmap** — give exactly 3 steps in order. Good patterns to recommend: (a) extract a shared interface or protocol that both sides depend on, (b) dependency inversion — have one side depend on an abstraction the other implements, (c) event/callback system to break the direct call dependency. Name the specific files and imports to change. Make the steps concrete enough that a developer could start within an hour.
+

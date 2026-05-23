@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --background: #0c0d0f;
+  --surface: #101114;
+  --surface-dim: #08090b;
+  --surface-container-lowest: #090a0c;
+  --surface-container-low: #121318;
+  --surface-container: #181a20;
+  --surface-container-high: #22252d;
+  --on-surface: #f2f0e8;
+  --on-surface-variant: #c8c3b7;
+  --on-surface-muted: #938e84;
+  --on-surface-subtle: #6f6a62;
+  --outline: #8d877d;
+  --outline-variant: #303139;
+  --primary: #8fd5d2;
+  --on-primary: #07101f;
+  --secondary: #a8d46f;
+  --on-secondary: #ffffff;
+  --tertiary: #e3c16f;
+  --error: #f17670;
+  --signal-green: #80c66f;
+  --signal-amber: #e3c16f;
+  --signal-red: #f17670;
+  --signal-cyan: #8fd5d2;
+  --signal-violet: #b7a4ff;
+  --accent-blue: #8fd5d2;
+  --accent-green: #80c66f;
+  --accent-amber: #e3c16f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--on-surface);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+.prose-provenant {
+  color: var(--on-surface-variant);
+  line-height: 1.7;
+}
+
+.prose-provenant h1,
+.prose-provenant h2,
+.prose-provenant h3 {
+  color: #f9fafb;
+  font-weight: 650;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose-provenant p {
+  margin: 0.65rem 0;
+}
+
+.prose-provenant code {
+  background: #242932;
+  color: #dce8ff;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+.prose-provenant pre {
+  background: #0c0f14;
+  border: 1px solid var(--outline-variant);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+.prose-provenant ul,
+.prose-provenant ol {
+  padding-left: 1.25rem;
+}
+
+::selection {
+  background: rgba(117, 167, 255, 0.32);
+}

@@ -1,0 +1,67 @@
+Create a Provenant change-summary page for `{{ ctx.from_ref }}` to `{{ ctx.to_ref }}`.
+
+Summarize code movement and documentation impact. Do not claim intent unless it
+is visible in the commit metadata or diff context.
+
+### Range
+- From: `{{ ctx.from_ref }}`
+- To: `{{ ctx.to_ref }}`
+
+### Added files
+{% for f in ctx.added_files %}
+- `{{ f }}`
+{% else %}
+- None.
+{% endfor %}
+
+### Deleted files
+{% for f in ctx.deleted_files %}
+- `{{ f }}`
+{% else %}
+- None.
+{% endfor %}
+
+### Modified files
+{% for f in ctx.modified_files %}
+- `{{ f }}`
+{% else %}
+- None.
+{% endfor %}
+
+### Symbol-level changes
+{% for diff in ctx.symbol_diffs %}
+- `{{ diff.path }}`: +{{ diff.added | length }} added, -{{ diff.removed | length }} removed, {{ diff.renamed | length }} renamed
+{% else %}
+- No symbol-level changes were provided.
+{% endfor %}
+
+### Affected generated pages
+{% for page_id in ctx.affected_page_ids %}
+- `{{ page_id }}`
+{% else %}
+- No affected pages were listed.
+{% endfor %}
+
+{% if ctx.trigger_commit_sha is defined and ctx.trigger_commit_sha %}
+### Trigger commit
+- SHA: `{{ ctx.trigger_commit_sha }}`
+{% if ctx.trigger_commit_message %}- Message: {{ ctx.trigger_commit_message }}{% endif %}
+{% if ctx.trigger_commit_author %}- Author: {{ ctx.trigger_commit_author }}{% endif %}
+{% endif %}
+
+{% if ctx.diff_text is defined and ctx.diff_text %}
+### Diff context
+```
+{{ ctx.diff_text }}
+```
+{% endif %}
+
+---
+Write the change-summary page now.
+
+**Synthesis rules:**
+1. **## What Changed** — plain English narrative. Not a file list — a sentence or two about the *intent* of the change. What was the developer trying to accomplish? Only state intent if it is evident from the commit message or diff; do not invent it.
+2. **## API Changes** — for each symbol-level change, flag: (a) new public symbols (additive, safe), (b) removed public symbols (breaking — callers will fail), (c) renamed symbols (breaking if not aliased). Use the word BREAKING explicitly for removals and renames.
+3. **## Documentation Drift** — for each affected page in the generated pages list, state in one sentence what is now stale and what needs to be regenerated.
+4. **## Risk Assessment** — answer three questions: Is this safe to deploy without a migration step? Does any caller need to update? Is there a rollback path if this change causes a regression?
+

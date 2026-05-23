@@ -1,0 +1,775 @@
+"""``provenant augment`` - hook-driven context enrichment for AI coding agents.
+
+Reads a Claude Code hook payload from stdin (JSON) and writes targeted
+enrichment back as a PostToolUse hook response.
+
+Design philosophy: an enrichment hook is only valuable when it tells the
+agent something the raw tool output didn't. Anything else is noise the
+agent has to scroll past. So the hook fires on every Grep/Glob/Bash but
+returns *nothing* most of the time, and only speaks up when there is
+asymmetric, durable value:
+
+  PostToolUse -> Grep / Glob
+    * Zero-result rescue: grep returned 0 hits but the wiki has a
+      semantic match (FTS on docs, fuzzy symbol match, decision record
+      mention). Surfaces the closest hit so the agent doesn't burn
+      another round on a synonym.
+    * Triage on flood: grep returned a large unfocused result set
+      (>=_TRIAGE_THRESHOLD lines). Surfaces the top 3 files by
+      PageRank so the agent can prioritise. The raw matches are still
+      visible - this is just a ranking lens.
+    * Skip otherwise: a focused result set means the agent already
+      found what it wanted; further graph context is just noise.
+
+  PostToolUse -> Bash
+    * After a successful git commit/merge/rebase/cherry-pick/pull, if
+      the wiki HEAD has drifted from .provenant/state.json's last sync
+      commit AND no `provenant update` is in flight AND we haven't
+      already warned for this HEAD, emit a one-line stale-wiki notice.
+
+  PreToolUse -> Read / Glob / Grep
+    * Emits a one-line reminder to call provenant_context() before reading source
+      files. Nudges Claude to use Provenant context before falling back to
+      raw file reading.
+
+Operational invariants:
+  * No LLM calls, no network. Pure local SQLite + Python.
+  * Cold start budget: well under the 10s hook timeout. Heavy imports
+    (sqlalchemy, asyncio) are deferred until we actually have work.
+  * Graceful failure: any unexpected error exits 0 with empty stdout
+    so a provenant problem never surfaces in the agent transcript.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+
+import click
+
+# Tunables - fixed thresholds keep the fire pattern predictable across
+# repos. If these ever need to vary, derive them from indexed-row counts
+# rather than exposing knobs (every knob is a way for the hook to drift).
+_TRIAGE_THRESHOLD = 15  # grep result lines before we surface a ranking
+_TRIAGE_TOP_N = 3
+_RESCUE_TOP_N = 2
+
+
+@click.command("augment")
+def augment_command() -> None:
+    """Enrich AI agent tool calls with codebase graph context (hook mode)."""
+    try:
+        _run_augment()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception:
+        # Hooks must never fail - exit silently on any error.
+        sys.exit(0)
+
+
+def _run_augment() -> None:
+    """Main entry point - reads stdin, dispatches to the post handler."""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+
+    event = payload.get("hook_event_name", "")
+    tool_name = payload.get("tool_name", "")
+
+    if event == "PreToolUse" and tool_name in ("Read", "Glob", "Grep"):
+        print(
+            "[Provenant] REMINDER: Call provenant_context() via the Provenant MCP tool before "
+            "reading source files. This provides ownership, risk signals, and architectural "
+            "context that Read/Glob/Grep cannot. Skip this only if you have already called "
+            "provenant_context() for these files in this session.",
+            flush=True,
+        )
+        return
+
+    if event != "PostToolUse":
+        return
+
+    tool_input = payload.get("tool_input", {})
+    tool_output = (
+        payload.get("tool_output")
+        or payload.get("tool_response")
+        or {}
+    )
+    cwd = payload.get("cwd", "")
+
+    if tool_name == "Bash":
+        result = _handle_bash_post(tool_input, tool_output, cwd)
+    elif tool_name in ("Grep", "Glob"):
+        result = _handle_search_post(tool_name, tool_input, tool_output, cwd)
+    else:
+        result = None
+
+    if result:
+        _emit_response(event, result)
+
+
+def _emit_response(event: str, context: str) -> None:
+    """Write the hook JSON response to stdout."""
+    response = {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": context,
+        }
+    }
+    sys.stdout.write(json.dumps(response))
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# PostToolUse - Grep / Glob: smart enrichment
+# ---------------------------------------------------------------------------
+
+
+def _handle_search_post(
+    tool_name: str,
+    tool_input: dict,
+    tool_output: object,
+    cwd: str,
+) -> str | None:
+    """Decide whether to enrich a Grep/Glob result and how."""
+    pattern = tool_input.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return None
+
+    # Path-style lookups don't benefit from semantic enrichment - the agent
+    # is reading literal locations, not exploring a concept.
+    if _looks_like_path_lookup(pattern):
+        return None
+
+    from pathlib import Path
+
+    repo_path = _find_repo_root(Path(cwd))
+    if repo_path is None:
+        return None
+
+    output_text = _extract_output_text(tool_output)
+    result_count = _count_search_results(output_text)
+
+    # Decision tree. The skip case is the most common - that's by design.
+    if result_count == 0:
+        mode = "rescue"
+    elif result_count >= _TRIAGE_THRESHOLD:
+        mode = "triage"
+    else:
+        mode = None
+
+    # Speculative prefetch: warm the context cache for paths visible in the
+    # output so a subsequent provenant_context() call can skip the DB round-trip.
+    import contextlib
+    import concurrent.futures
+
+    with contextlib.suppress(Exception):
+        paths = _extract_paths_from_output(output_text, repo_path)
+        if paths:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                ex.submit(_prefetch_context_sync, repo_path, paths).result(timeout=3.0)
+
+    if mode is None:
+        return None
+
+    import asyncio
+
+    return asyncio.run(_search_enrich(repo_path, pattern, mode, result_count))
+
+
+def _looks_like_path_lookup(pattern: str) -> bool:
+    """Heuristic: pattern is a literal file path, not a search concept.
+
+    Path-style queries that should skip enrichment:
+      - Contains a directory separator (``/`` or ``\\``).
+      - Ends with a known source extension (``.py``, ``.ts``, ``.tsx``,
+        ``.js``, ``.jsx``, ``.go``, ``.rs``, ``.java``, ``.kt``, etc.).
+      - Looks like a glob over files (``*.py``, ``**/*.ts``).
+
+    These are agents looking up specific files; semantic enrichment of
+    such queries duplicates information the result already provides.
+    """
+    if "/" in pattern or "\\" in pattern:
+        return True
+    lower = pattern.lower().rstrip()
+    _EXTS = (
+        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+        ".go", ".rs", ".java", ".kt", ".kts", ".scala", ".rb", ".php",
+        ".cs", ".swift", ".cpp", ".cc", ".c", ".h", ".hpp", ".lua",
+        ".sql", ".yaml", ".yml", ".toml", ".json", ".md",
+    )
+    return lower.endswith(_EXTS)
+
+
+def _extract_output_text(tool_output: object) -> str:
+    """Pull the textual portion of a Claude Code tool_output, defensively.
+
+    Claude Code's hook payload shape varies a little by tool: Bash
+    surfaces ``stdout``/``stderr``, Grep/Glob surface ``output`` or
+    ``tool_response``. We only need a string we can count newlines in,
+    so we accept any of the common shapes.
+    """
+    if isinstance(tool_output, str):
+        return tool_output
+    if not isinstance(tool_output, dict):
+        return ""
+    for key in ("output", "result", "content", "stdout", "text"):
+        val = tool_output.get(key)
+        if isinstance(val, str):
+            return val
+        if isinstance(val, list):
+            # Some shapes wrap content as [{"type": "text", "text": "..."}].
+            parts = []
+            for item in val:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    t = item.get("text") or item.get("content")
+                    if isinstance(t, str):
+                        parts.append(t)
+            if parts:
+                return "\n".join(parts)
+    return ""
+
+
+def _count_search_results(output_text: str) -> int:
+    """Count tool-result lines, treating Grep/Glob 'no match' as zero."""
+    if not output_text or not output_text.strip():
+        return 0
+    stripped = output_text.strip()
+    # Common no-match sentinels emitted by Claude Code's Grep/Glob tool.
+    _ZERO_MARKERS = (
+        "no matches found",
+        "no files found",
+        "no files matched",
+        "found 0 files",
+        "found 0 matches",
+    )
+    head = stripped.lower().splitlines()[0] if stripped else ""
+    if any(marker in head for marker in _ZERO_MARKERS):
+        return 0
+    # Strip a "Found N files\n" / "Found N matches\n" header if present -
+    # the count we want is the actual result lines, not the banner.
+    lines = [ln for ln in stripped.splitlines() if ln.strip()]
+    if lines and lines[0].lower().startswith("found "):
+        lines = lines[1:]
+    return len(lines)
+
+
+async def _search_enrich(
+    repo_path: "object",
+    pattern: str,
+    mode: str,
+    result_count: int,
+) -> str | None:
+    """Run the rescue or triage query against the wiki and format output."""
+    import re
+
+    from pathlib import Path
+    from sqlalchemy import select
+
+    from provenant.core.persistence import (
+        FullTextSearch,
+        GraphNode,
+        WikiSymbol,
+        create_engine,
+        create_session_factory,
+        get_session,
+    )
+    from provenant.core.persistence.crud import get_repository_by_path
+    from provenant.core.persistence.database import resolve_db_url
+
+    repo_path = Path(repo_path)
+    db_path = repo_path / ".provenant" / "wiki.db"
+    if not db_path.exists():
+        return None
+
+    url = resolve_db_url(repo_path)
+    engine = create_engine(url)
+
+    try:
+        sf = create_session_factory(engine)
+        async with get_session(sf) as session:
+            repo = await get_repository_by_path(session, str(repo_path))
+            if repo is None:
+                return None
+            repo_id = repo.id
+
+            clean = re.sub(r"[^\w./_-]", "", pattern).strip("./")
+
+            if mode == "rescue":
+                return await _rescue(
+                    session, engine, repo_id, pattern, clean
+                )
+            if mode == "triage":
+                return await _triage(
+                    session, repo_id, pattern, clean, result_count
+                )
+            return None
+    finally:
+        await engine.dispose()
+
+
+async def _rescue(
+    session,
+    engine,
+    repo_id: int,
+    pattern: str,
+    clean: str,
+) -> str | None:
+    """Zero-result rescue: grep missed but the wiki has a semantic hit.
+
+    Looks for the closest match in three places, in priority order:
+
+      1. Fuzzy symbol name match - handles snake_case <-> camelCase <->
+         PascalCase drift. ``parse_yaml`` finds ``parseYaml`` /
+         ``ParseYaml`` / ``yaml_parser``.
+      2. FTS on wiki page content - handles conceptual misses where
+         the agent grepped for a synonym ("session" but the codebase
+         calls it "context").
+      3. Skip - if neither signal hits, we have nothing useful to add.
+
+    Output is a single line so it can't be confused with a real result.
+    """
+    from sqlalchemy import or_, select
+
+    from provenant.core.persistence import (
+        FullTextSearch,
+        GraphNode,
+        WikiSymbol,
+    )
+
+    if not clean:
+        return None
+
+    # Build a small set of token variants. Cheap; helps catch case-style
+    # drift without a heavy similarity index.
+    variants = _name_variants(clean)
+    like_clauses = [WikiSymbol.name.ilike(f"%{v}%") for v in variants]
+    sym_stmt = (
+        select(WikiSymbol.name, WikiSymbol.kind, WikiSymbol.file_path, WikiSymbol.start_line)
+        .where(WikiSymbol.repository_id == repo_id, or_(*like_clauses))
+        .limit(_RESCUE_TOP_N)
+    )
+    rows = (await session.execute(sym_stmt)).all()
+    if rows:
+        # Rank: prefer exact-token-equal matches; then shortest name (most
+        # specific). All ties broken by file path lex order for stability.
+        def _rank(row):
+            name = (row[0] or "").lower()
+            exact = name in {v.lower() for v in variants}
+            return (not exact, len(name), row[2] or "")
+
+        rows = sorted(rows, key=_rank)[:_RESCUE_TOP_N]
+        first = rows[0]
+        line = f":{first[3]}" if first[3] else ""
+        extras = ""
+        if len(rows) > 1:
+            extras = f" (+{len(rows) - 1} more)"
+        return (
+            f"[provenant] No literal match for `{pattern}`. Closest indexed symbol: "
+            f"{first[1]} `{first[0]}` in {first[2]}{line}{extras}"
+        )
+
+    # Fall back to FTS on wiki content. Only return if the FTS row actually
+    # points at a code page (file/module/api), not a generic doc page.
+    fts = FullTextSearch(engine)
+    try:
+        fts_rows = await fts.search(pattern, limit=3)
+    except Exception:
+        fts_rows = []
+    for r in fts_rows:
+        target = getattr(r, "target_path", None) or ""
+        page_type = getattr(r, "page_type", "") or ""
+        if "::" in target:
+            target = target.split("::")[0]
+        if target and page_type in ("file", "file_page", "module_page", "api_contract", "infra_page"):
+            return (
+                f"[provenant] No literal match for `{pattern}`. "
+                f"Wiki suggests `{target}` ({page_type})."
+            )
+    return None
+
+
+async def _triage(
+    session,
+    repo_id: int,
+    pattern: str,
+    clean: str,
+    result_count: int,
+) -> str | None:
+    """Big-result triage: surface top files by PageRank.
+
+    The grep result set has too many lines for the agent to scan
+    efficiently. Without overriding the agent's literal results, we
+    point at the top _TRIAGE_TOP_N files (by structural centrality)
+    that contain the pattern in either symbol or path.
+
+    Output is one line plus an enumerated list. Three lines max.
+    """
+    from sqlalchemy import or_, select
+
+    from provenant.core.persistence import GraphNode, WikiSymbol
+
+    if not clean:
+        return None
+
+    # Files that contain a symbol whose name matches, or whose own path
+    # matches. Either way we can rank by PageRank from graph_nodes.
+    sym_files_stmt = (
+        select(WikiSymbol.file_path)
+        .where(
+            WikiSymbol.repository_id == repo_id,
+            WikiSymbol.name.ilike(f"%{clean}%"),
+        )
+        .distinct()
+        .limit(50)
+    )
+    sym_files = {r[0] for r in (await session.execute(sym_files_stmt)).all() if r[0]}
+
+    path_stmt = (
+        select(GraphNode.node_id)
+        .where(
+            GraphNode.repository_id == repo_id,
+            GraphNode.node_type == "file",
+            GraphNode.node_id.ilike(f"%{clean}%"),
+        )
+        .limit(50)
+    )
+    path_files = {r[0] for r in (await session.execute(path_stmt)).all() if r[0]}
+
+    candidates = sym_files | path_files
+    if not candidates:
+        return None
+
+    pr_stmt = select(GraphNode.node_id, GraphNode.pagerank).where(
+        GraphNode.repository_id == repo_id,
+        GraphNode.node_type == "file",
+        GraphNode.node_id.in_(candidates),
+    )
+    pr_rows = (await session.execute(pr_stmt)).all()
+    if not pr_rows:
+        return None
+
+    ranked = sorted(pr_rows, key=lambda r: (r[1] or 0.0), reverse=True)[:_TRIAGE_TOP_N]
+    if not ranked:
+        return None
+
+    header = (
+        f"[provenant] {result_count}+ matches for `{pattern}`. "
+        f"Top files by graph centrality:"
+    )
+    lines = [header] + [f"  {row[0]}" for row in ranked]
+    return "\n".join(lines)
+
+
+def _name_variants(token: str) -> list[str]:
+    """Generate snake_case <-> camelCase <-> PascalCase variants for fuzzy match.
+
+    Cheap to compute, and catches the most common naming-drift class
+    that causes literal grep to miss what the wiki has indexed.
+    """
+    import re
+
+    token = token.strip("_-./")
+    if not token:
+        return []
+    seen: list[str] = []
+    candidates = {token, token.lower(), token.upper()}
+    # snake_case -> camelCase / PascalCase
+    if "_" in token:
+        parts = [p for p in token.split("_") if p]
+        if parts:
+            candidates.add("".join(p.capitalize() for p in parts))
+            candidates.add(parts[0].lower() + "".join(p.capitalize() for p in parts[1:]))
+    # camelCase / PascalCase -> snake_case
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", token).lower()
+    if snake != token.lower():
+        candidates.add(snake)
+    # Dedup while preserving insertion order roughly.
+    for c in candidates:
+        if c and c not in seen:
+            seen.append(c)
+    return seen
+
+
+# ---------------------------------------------------------------------------
+# PostToolUse - Bash: stale-wiki detection after git commits
+# ---------------------------------------------------------------------------
+
+_GIT_COMMIT_PATTERNS = (
+    "git commit",
+    "git merge",
+    "git rebase",
+    "git cherry-pick",
+    "git pull",
+)
+
+
+def _handle_bash_post(tool_input: dict, tool_output: object, cwd: str) -> str | None:
+    """After a successful git commit, check if the wiki needs updating."""
+    if isinstance(tool_output, dict):
+        exit_code = tool_output.get("exit_code")
+        if exit_code is None:
+            stdout = tool_output.get("stdout", "")
+            if isinstance(stdout, str) and (
+                "error" in stdout.lower() or "fatal" in stdout.lower()
+            ):
+                return None
+        elif exit_code != 0:
+            return None
+
+    cmd = tool_input.get("command", "")
+    if not isinstance(cmd, str) or not any(
+        p in cmd for p in _GIT_COMMIT_PATTERNS
+    ):
+        return None
+
+    from pathlib import Path
+
+    repo_path = _find_repo_root(Path(cwd))
+    if repo_path is None:
+        return None
+
+    state_path = repo_path / ".provenant" / "state.json"
+    if not state_path.exists():
+        return None
+
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    last_sync = state.get("last_sync_commit")
+    if not last_sync:
+        return None
+
+    try:
+        import subprocess
+
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except Exception:
+        return None
+
+    if head == last_sync:
+        return None
+
+    if _update_in_flight(repo_path, head):
+        return None
+
+    if _already_warned(repo_path, head):
+        return None
+    _record_warning(repo_path, head)
+
+    docs_enabled = state.get("docs_enabled", True)
+    artifact = "Wiki" if docs_enabled else "Index"
+    return (
+        f"[provenant] {artifact} is stale - last indexed at commit "
+        f"{last_sync[:8]}, HEAD is now {head[:8]}. "
+        "Run `provenant update` to refresh documentation and graph context."
+    )
+
+
+def _update_in_flight(repo_path: "object", head: str) -> bool:
+    """Return True if a recent ``provenant update`` is still running."""
+    import time
+    from pathlib import Path
+
+    lock_path = Path(repo_path) / ".provenant" / ".update.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    started = payload.get("started_at")
+    if not isinstance(started, (int, float)):
+        return False
+    if time.time() - started > 30 * 60:
+        return False
+
+    target = payload.get("target_commit")
+    if target and target == head:
+        return True
+    return True
+
+
+def _already_warned(repo_path: "object", head: str) -> bool:
+    from pathlib import Path
+
+    marker = Path(repo_path) / ".provenant" / ".augment-warned"
+    if not marker.exists():
+        return False
+    try:
+        return marker.read_text(encoding="utf-8").strip() == head
+    except OSError:
+        return False
+
+
+def _record_warning(repo_path: "object", head: str) -> None:
+    from pathlib import Path
+
+    marker = Path(repo_path) / ".provenant" / ".augment-warned"
+    try:
+        marker.write_text(head, encoding="utf-8")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Speculative prefetch helpers
+# ---------------------------------------------------------------------------
+
+_PREFETCH_TTL_SECONDS = 300
+_PREFETCH_MAX_ENTRIES = 20
+_PREFETCH_TOP_PATHS = 3
+
+
+def _extract_paths_from_output(output_text: str, repo_path: "object") -> list[str]:
+    """Extract existing file paths from grep/glob output, top-N by frequency."""
+    import re
+    from pathlib import Path
+
+    if not output_text:
+        return []
+
+    repo = Path(repo_path)
+    path_re = re.compile(r"(?:^|\s)([^\s:\"']+\.[a-zA-Z]{1,6})(?::\d+)?", re.MULTILINE)
+    counts: dict[str, int] = {}
+    for m in path_re.finditer(output_text):
+        candidate = m.group(1).strip().strip("./\\")
+        if not candidate:
+            continue
+        p = repo / candidate if not Path(candidate).is_absolute() else Path(candidate)
+        try:
+            if p.is_file():
+                counts[candidate] = counts.get(candidate, 0) + 1
+        except OSError:
+            pass
+    if not counts:
+        return []
+    return sorted(counts, key=lambda k: counts[k], reverse=True)[:_PREFETCH_TOP_PATHS]
+
+
+def _read_prefetch_cache(cache_path: "object") -> dict:
+    import json as _json
+    from pathlib import Path
+    try:
+        return _json.loads(Path(cache_path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_prefetch_cache(cache_path: "object", entries: dict) -> None:
+    import json as _json
+    import os
+    from pathlib import Path
+
+    path = Path(cache_path)
+    tmp = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(_json.dumps(entries), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except Exception:
+        pass
+
+
+def _evict_prefetch_cache(entries: dict) -> dict:
+    import time
+    now = time.time()
+    entries = {k: v for k, v in entries.items()
+               if now - v.get("_ts", 0) < _PREFETCH_TTL_SECONDS}
+    if len(entries) > _PREFETCH_MAX_ENTRIES:
+        sorted_keys = sorted(entries, key=lambda k: entries[k].get("_ts", 0))
+        for k in sorted_keys[:len(entries) - _PREFETCH_MAX_ENTRIES]:
+            del entries[k]
+    return entries
+
+
+async def _prefetch_context_async(repo_path: "object", paths: list[str]) -> None:
+    import time
+    from pathlib import Path
+    from sqlalchemy import select
+
+    from provenant.core.persistence import (
+        create_engine,
+        create_session_factory,
+        get_session,
+        init_db,
+    )
+    from provenant.core.persistence.crud import get_repository_by_path
+    from provenant.core.persistence.database import resolve_db_url
+    from provenant.core.persistence.models import Page
+
+    repo_path = Path(repo_path)
+    cache_path = repo_path / ".provenant" / ".prefetch_cache.json"
+    url = resolve_db_url(repo_path)
+    engine = create_engine(url)
+    try:
+        await init_db(engine)
+        sf = create_session_factory(engine)
+        async with get_session(sf) as session:
+            repo = await get_repository_by_path(session, str(repo_path))
+            if repo is None:
+                return
+            entries = _read_prefetch_cache(cache_path)
+            entries = _evict_prefetch_cache(entries)
+            now = time.time()
+            for path in paths:
+                stmt = (
+                    select(Page)
+                    .where(Page.repository_id == repo.id, Page.target_path == path)
+                    .limit(1)
+                )
+                row = (await session.execute(stmt)).scalar_one_or_none()
+                if row is None:
+                    continue
+                entries[path] = {
+                    "result": {
+                        "target": path,
+                        "docs": {"summary": row.summary or ""},
+                        "_prefetch_partial": True,
+                    },
+                    "_ts": now,
+                }
+            _write_prefetch_cache(cache_path, entries)
+    finally:
+        await engine.dispose()
+
+
+def _prefetch_context_sync(repo_path: "object", paths: list[str]) -> None:
+    import asyncio
+    asyncio.run(_prefetch_context_async(repo_path, paths))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_repo_root(cwd: "object") -> "object | None":
+    """Walk up from cwd to find a directory with ``.provenant/``."""
+    from pathlib import Path
+
+    current = Path(cwd).resolve()
+    for _ in range(20):
+        if (current / ".provenant").is_dir():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None

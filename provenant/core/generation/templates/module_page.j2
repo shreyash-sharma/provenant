@@ -1,0 +1,79 @@
+Create a Provenant module page for `{{ ctx.module_path }}`.
+
+Use the module facts to explain responsibility, public surface, dependencies,
+and operational notes. Return Markdown with the sections requested by the
+system prompt.
+
+### Module facts
+- Path: `{{ ctx.module_path }}`
+- Language: {{ ctx.language }}
+- Total symbols: {{ ctx.total_symbols }}
+- Public symbols: {{ ctx.public_symbols }}
+- Mean PageRank: {{ "%.4f"|format(ctx.pagerank_mean) }}
+
+### Entry points
+{% if ctx.entry_points %}
+{% for ep in ctx.entry_points %}
+- `{{ ep }}`
+{% endfor %}
+{% else %}
+- No module entry points were detected.
+{% endif %}
+
+### Imports from other modules
+{% if ctx.dependencies %}
+{% for dep in ctx.dependencies %}
+- `{{ dep }}`
+{% endfor %}
+{% else %}
+- No module dependencies were detected.
+{% endif %}
+
+### Imported by
+{% if ctx.dependents %}
+{% for dep in ctx.dependents %}
+- `{{ dep }}`
+{% endfor %}
+{% else %}
+- No module dependents were detected.
+{% endif %}
+
+{% if ctx.community_label %}
+### Architectural community
+The module is part of `{{ ctx.community_label }}`{% if ctx.community_cohesion > 0 %} with cohesion {{ "%.2f"|format(ctx.community_cohesion) }}{% endif %}.
+{% endif %}
+
+### Files
+{% for f in ctx.files %}
+{% set summary = ctx.file_summaries.get(f, '') %}
+- `{{ f }}`{% if summary %}: {{ summary }}{% endif %}
+{% endfor %}
+
+{% if ctx.key_classes %}
+### Type relationships
+{% for h in ctx.key_classes %}
+- `{{ h.child }}` {{ h.kind }} `{{ h.parent }}`{% if h.parent_file is defined and h.parent_file %} in `{{ h.parent_file }}`{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if module_git_summary is defined and module_git_summary %}
+### Ownership and churn
+{% for pkg_owner in module_git_summary.top_owners %}
+- {{ pkg_owner.file_count }} files primarily owned by {{ pkg_owner.name }}
+{% endfor %}
+- Most active file: `{{ module_git_summary.most_active_file }}` ({{ module_git_summary.most_active_commits_90d }} commits in 90 days)
+{% if module_git_summary.top_owners | length == 1 %}
+Bus factor signal: single owner for this module — flag as a knowledge concentration risk.
+{% endif %}
+{% endif %}
+
+---
+Write the module page now.
+
+**Synthesis rules:**
+1. **## Responsibility** — one sentence. What is the single job of this module in the system? If it has more than one job, say so and flag it as a violation of single-responsibility.
+2. **## Public API Surface** — identify which symbols are genuinely meant for external callers vs which are implementation details that happen to be public. Flag any that look like accidental public exposure.
+3. **## Internal Architecture** — explain how the files divide responsibility. Which file is the entry point? Which holds state? Which is pure logic?
+4. **## Change Risk** — use the mean PageRank ({{ "%.4f"|format(ctx.pagerank_mean) }}) and churn data: which files in this module are safe to modify in isolation, and which ones have high fan-in that makes changes risky?
+5. **## Extension Points** — how does a developer add new behaviour to this module without modifying existing files? Is there a registry, factory, or plugin pattern?
+

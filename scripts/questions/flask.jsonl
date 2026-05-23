@@ -1,0 +1,30 @@
+{"id": "flask-001", "question": "How does Flask push and pop the request context, and what happens when it tears down?", "tags": ["context", "lifecycle"]}
+{"id": "flask-002", "question": "Where is the application context created and how does it differ from the request context?", "tags": ["context", "appctx"]}
+{"id": "flask-003", "question": "How does Flask route a URL to a view function — where is the routing logic implemented?", "tags": ["routing"]}
+{"id": "flask-004", "question": "How are blueprints registered on an application and how do blueprint URL prefixes work?", "tags": ["blueprints"]}
+{"id": "flask-005", "question": "Where is the before_request hook stored and in what order are before_request functions called?", "tags": ["hooks", "lifecycle"]}
+{"id": "flask-006", "question": "How does Flask's session interface work and where is the default cookie-based session implemented?", "tags": ["sessions"]}
+{"id": "flask-007", "question": "How does the application factory pattern work in Flask and what does create_app typically do?", "tags": ["app-factory"]}
+{"id": "flask-008", "question": "Where is Flask's configuration loading logic and how does from_envvar work?", "tags": ["config"]}
+{"id": "flask-009", "question": "How does Flask's test client simulate requests and where is FlaskClient implemented?", "tags": ["testing"]}
+{"id": "flask-010", "question": "How does Flask handle errors — where are error handlers registered and dispatched?", "tags": ["error-handling"]}
+{"id": "flask-011", "question": "What is the g object in Flask, where is it defined, and when is it reset?", "tags": ["globals", "context"]}
+{"id": "flask-012", "question": "How does Flask's signal system work and where are the request_started and request_finished signals defined?", "tags": ["signals"]}
+{"id": "flask-013", "question": "How does Flask's built-in CLI work and how does flask run start the development server?", "tags": ["cli"]}
+{"id": "flask-014", "question": "Where is URL building implemented in Flask and how does url_for resolve endpoint names?", "tags": ["routing", "url-building"]}
+{"id": "flask-015", "question": "How does Flask's template rendering work and where does render_template look for template files?", "tags": ["templating"]}
+{"id": "flask-016", "question": "How does Flask dispatch a request from the WSGI entry point all the way to the view function?", "tags": ["dispatch", "lifecycle"]}
+{"id": "flask-017", "question": "Where is the after_request hook processed and how does Flask ensure teardown functions always run?", "tags": ["hooks", "teardown"]}
+{"id": "flask-018", "question": "How does Flask handle JSON responses and where is jsonify implemented?", "tags": ["json", "responses"]}
+{"id": "flask-019", "question": "What is the sansio subpackage in Flask and how does it relate to the main app?", "tags": ["sansio", "architecture"]}
+{"id": "flask-020", "question": "How does Flask's view class system work — where is MethodView defined and how does dispatch_request work?", "tags": ["views", "class-based"]}
+{"id": "flask-021", "question": "Where are Flask's request and response proxy globals defined and how do they work as thread-local proxies?", "tags": ["globals", "proxies"]}
+{"id": "flask-022", "question": "How does Flask load and merge configuration from a Python file using from_pyfile?", "tags": ["config"]}
+{"id": "flask-023", "question": "How does blueprint nesting work in Flask and how are nested URL prefixes resolved?", "tags": ["blueprints"]}
+{"id": "flask-024", "question": "Where is Flask's debug mode implemented and what does it enable beyond the reloader?", "tags": ["debug"]}
+{"id": "flask-025", "question": "How does Flask's send_file helper work and where does it set Content-Type and Content-Disposition headers?", "tags": ["helpers", "responses"]}
+{"id": "flask-026", "question": "How does Flask determine the static folder for a blueprint vs the application?", "tags": ["blueprints", "static"]}
+{"id": "flask-027", "question": "Where is Flask's exception handling for HTTP errors like 404 and 500 implemented?", "tags": ["error-handling", "http-errors"]}
+{"id": "flask-028", "question": "How does Flask's open_resource work and what is it used for?", "tags": ["helpers", "resources"]}
+{"id": "flask-029", "question": "How does Flask decide whether to return a JSON response when the Accept header requests JSON?", "tags": ["json", "content-negotiation"]}
+{"id": "flask-030", "question": "Where is the teardown_appcontext hook stored and when does it fire relative to teardown_request?", "tags": ["hooks", "teardown", "context"]}

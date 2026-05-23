@@ -1,0 +1,1903 @@
+"""``provenant init`` - full wiki generation for a repository."""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import click
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+
+from provenant.cli.cost_estimator import build_generation_plan, estimate_cost
+from provenant.cli.editor_integrations.defaults import get_default_disabled_project_files
+from provenant.cli.editor_setup import (
+    register_editor_clients,
+    resolve_editor_setup_options,
+    write_editor_project_files,
+)
+from provenant.cli.helpers import (
+    console,
+    ensure_provenant_dir,
+    get_head_commit,
+    load_config,
+    load_state,
+    resolve_provider,
+    resolve_reasoning,
+    resolve_repo_path,
+    run_async,
+    save_config,
+    save_state,
+)
+from provenant.cli.ui import MaybeCountColumn
+
+# ---------------------------------------------------------------------------
+# Helpers (kept in this file; _resolve_embedder also imported by other cmds)
+# ---------------------------------------------------------------------------
+
+
+class CostGateDeclined(Exception):
+    """Raised when the user answers No at the LLM-cost confirmation prompt.
+
+    Carries no payload - the caller just needs to know that generation was
+    declined so it can persist state in index-only shape (no docs) and
+    return cleanly. Using an exception (vs. a sentinel return value) lets
+    us bail out of nested generation flows without rethreading return
+    types through every helper.
+    """
+
+
+def _confirm_cost_gate(message: str) -> bool:
+    """Render the cost-gate `[y/N]` prompt with visual padding.
+
+    Click's plain ``confirm`` interleaves with the trailing line of any
+    prior Rich output (progress-bar frames, status spinners), making the
+    `[y/N]` glyphs hard to spot - users have walked past it and approved
+    a $14 bill thinking they were still in cost-estimate territory. A
+    blank line + horizontal rule cleanly separates the prompt from
+    whatever was printed above it.
+    """
+    console.line()
+    console.rule(style="yellow")
+    return click.confirm(message, default=False)
+
+
+def _offer_hook_install(
+    console_obj: Any,
+    repo_paths: list[Path],
+    aliases: list[str] | None = None,
+) -> None:
+    """Interactively offer to install post-commit hooks for auto-sync.
+
+    For a single repo, asks yes/no.  For multiple repos (workspace), lets the
+    user pick which repos to install hooks for.
+    """
+    if not sys.stdin.isatty():
+        return  # Non-interactive - skip
+
+    from provenant.cli.hooks import install, status
+
+    # Filter to repos that don't already have the hook
+    candidates: list[tuple[Path, str]] = []
+    for i, rp in enumerate(repo_paths):
+        label = aliases[i] if aliases else rp.name
+        if status(rp) != "installed":
+            candidates.append((rp, label))
+
+    if not candidates:
+        return  # All already have hooks
+
+    console_obj.print()
+    console_obj.print(
+        "[bold]Auto-sync:[/bold] Install a post-commit hook to keep the wiki "
+        "in sync after every commit?"
+    )
+
+    if len(candidates) == 1:
+        rp, label = candidates[0]
+        if click.confirm(f"  Install post-commit hook for {label}?", default=True):
+            result = install(rp)
+            console_obj.print(f"  [green]OK[/green] {label}: {result}")
+        else:
+            console_obj.print(
+                "  [dim]Skipped. Run 'provenant hook install' later to set up.[/dim]"
+            )
+    else:
+        # Workspace: show checkboxes-style selection
+        console_obj.print("  Select repos (enter numbers, comma-separated, or 'all'):")
+        for i, (rp, label) in enumerate(candidates, 1):
+            console_obj.print(f"    [{i}] {label}")
+
+        raw = click.prompt(
+            "  Repos",
+            default="all",
+            show_default=True,
+        )
+        if raw.strip().lower() == "all":
+            selected_indices = list(range(len(candidates)))
+        elif raw.strip().lower() in ("none", "skip", ""):
+            selected_indices = []
+        else:
+            try:
+                selected_indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip()]
+            except ValueError:
+                selected_indices = []
+
+        installed = 0
+        for idx in selected_indices:
+            if 0 <= idx < len(candidates):
+                rp, label = candidates[idx]
+                result = install(rp)
+                console_obj.print(f"  [green]OK[/green] {label}: {result}")
+                installed += 1
+
+        if installed == 0:
+            console_obj.print(
+                "  [dim]Skipped. Run 'provenant hook install --workspace' later.[/dim]"
+            )
+
+
+def _resolve_embedder(embedder_flag: str | None) -> str:
+    """Auto-detect embedder from env vars, or use the flag value."""
+    if embedder_flag:
+        return embedder_flag
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        return "gemini"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter"
+    # Default to local — works offline, no API key, good quality
+    return "local"
+
+
+def _interactive_embedder_select(console: Any) -> str:
+    """Prompt the user to choose an embedder. Shows concrete recall numbers."""
+    console.print()
+    console.print("[bold]Embeddings — helps Provenant find the right files[/bold]")
+    console.print("  Provenant uses embeddings to search by meaning, not just keywords.")
+    console.print("  On SWE-bench Verified (500 tasks), embeddings improved Coverage@10 by +4.4 pts.")
+    console.print()
+    console.print("    [cyan][1] Local[/cyan]   — runs on your machine, free, ~40 MB download, no API key [bold](recommended)[/bold]")
+    console.print("    [cyan][2] OpenAI[/cyan]  — good accuracy, ~$0.0001 per query, needs OPENAI_API_KEY")
+    console.print("    [cyan][3] Gemini[/cyan]  — good accuracy, free tier available, needs GEMINI_API_KEY")
+    console.print("    [cyan][4] Custom[/cyan]  — any OpenAI-compatible endpoint (Fireworks AI, Azure, etc.)")
+    console.print("    [cyan][5] Skip[/cyan]    — keyword search only, no download needed")
+    console.print()
+
+    raw = click.prompt("  Embedder", default="1", show_default=True).strip()
+    mapping = {
+        "1": "local",  "local": "local",
+        "2": "openai", "openai": "openai",
+        "3": "gemini", "gemini": "gemini",
+        "4": "custom", "custom": "custom",
+        "5": "none",   "none": "none", "skip": "none",
+    }
+    selected = mapping.get(raw.lower(), "local")
+
+    if selected == "local":
+        import subprocess
+        import sys as _sys
+
+        # Install fastembed if missing (no PyTorch, no CUDA — pure ONNX Runtime)
+        try:
+            import fastembed  # noqa: F401
+        except ImportError:
+            console.print("  Installing fastembed (~40 MB, one-time)...")
+            try:
+                subprocess.check_call(
+                    [_sys.executable, "-m", "pip", "install", "fastembed", "-q"],
+                    stdout=subprocess.DEVNULL,
+                )
+                console.print("  [green]OK[/green] fastembed installed")
+            except subprocess.CalledProcessError:
+                console.print("  [yellow]Install failed — run: pip install fastembed[/yellow]")
+                selected = "none"
+
+        if selected == "local":
+            # Download and load model now so first query has no cold start
+            console.print("  Downloading embedding model (~25 MB, one-time)...")
+            try:
+                from provenant.llm.providers.embedding.local import LocalEmbedder
+                LocalEmbedder().warmup()
+                console.print("  [green]OK[/green] Embedding model ready")
+                console.line()
+            except Exception as exc:
+                console.print(f"  [yellow]Model download failed: {exc}[/yellow]")
+                console.print("  [dim]Will retry on first use.[/dim]")
+                console.line()
+
+    if selected == "openai":
+        selected = _validate_openai_embedder(console, selected)
+    if selected == "gemini" and not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        console.print("  [yellow]Warning: GEMINI_API_KEY not set. Add it to .env or your shell.[/yellow]")
+    if selected == "custom":
+        selected = _configure_custom_embedder(console)
+    if selected == "none":
+        console.print("  [dim]Vector search disabled. Provenant will use keyword search only.[/dim]")
+
+    return selected
+
+
+def _configure_custom_embedder(console: Any) -> str:
+    """Prompt for a custom OpenAI-compatible embedding endpoint."""
+    import getpass
+
+    console.print()
+    console.print("  [bold]Custom embedder setup[/bold]")
+    console.print("  Enter your OpenAI-compatible endpoint details.")
+    console.print("  Example — Fireworks AI (nomic-embed-text-v1.5, 768-dim, best results):")
+    console.print("    Base URL : https://api.fireworks.ai/inference/v1")
+    console.print("    Model    : nomic-embed-text-v1.5")
+    console.print("    API key  : your Fireworks key (fw_...)")
+    console.print()
+
+    base_url = click.prompt(
+        "  Base URL",
+        default="https://api.fireworks.ai/inference/v1",
+    ).strip()
+    model = click.prompt(
+        "  Model name",
+        default="nomic-embed-text-v1.5",
+    ).strip()
+
+    api_key = os.environ.get("OPENAI_EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        api_key = getpass.getpass("  API key (hidden): ").strip()
+
+    if api_key:
+        os.environ["OPENAI_EMBEDDING_API_KEY"] = api_key
+    os.environ["OPENAI_EMBEDDING_BASE_URL"] = base_url
+    os.environ["OPENAI_EMBEDDING_MODEL"] = model
+
+    console.print(f"  [green]OK[/green] Custom embedder configured ({model} @ {base_url})")
+    return "openai"
+
+
+def _validate_openai_embedder(console: Any, selected: str) -> str:
+    """Test the OpenAI embedding key. On failure, offer retry or fallback to local/skip."""
+    import asyncio
+
+    for attempt in range(2):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            console.print("  [yellow]OPENAI_API_KEY not set.[/yellow]")
+            _prompt_embedder_key(console, "OPENAI_API_KEY")
+            continue
+
+        try:
+            from provenant.llm.providers.embedding.openai import OpenAIEmbedder
+            embedder = OpenAIEmbedder()
+            asyncio.get_event_loop().run_until_complete(embedder.embed(["test"]))
+            return "openai"
+        except Exception as exc:
+            msg = str(exc)
+            if "401" in msg or "invalid_api_key" in msg or "Incorrect API key" in msg:
+                console.print(
+                    "  [yellow]OpenAI embedding key rejected (401).[/yellow]"
+                    " Note: Fireworks keys (fw_...) do not work with OpenAI embeddings."
+                )
+            else:
+                console.print(f"  [yellow]OpenAI embeddings failed: {exc}[/yellow]")
+
+        if attempt == 0:
+            has_key = click.confirm(
+                "  Do you have a separate OpenAI API key for embeddings?",
+                default=False,
+            )
+            if has_key:
+                _prompt_embedder_key(console, "OPENAI_API_KEY")
+            else:
+                break
+
+    # Fallback selection
+    console.print("  Falling back — choose an alternative:")
+    console.print("    [cyan][1] Local[/cyan]  — free, ~40 MB, no API key [bold](recommended)[/bold]")
+    console.print("    [cyan][2] Skip[/cyan]   — keyword search only")
+    raw = click.prompt("  Embedder", default="1", show_default=True).strip()
+    return "local" if raw.strip() != "2" else "none"
+
+
+def _prompt_embedder_key(console: Any, env_var: str) -> None:
+    """Prompt for an API key, set it in the environment."""
+    import getpass
+    key = getpass.getpass(f"  Paste your {env_var} (hidden): ").strip()
+    if key:
+        os.environ[env_var] = key
+        console.print(f"  [green]OK[/green] {env_var} set for this session")
+
+
+# ---------------------------------------------------------------------------
+# Persistence - saves PipelineResult to SQLite
+# ---------------------------------------------------------------------------
+
+
+async def _persist_result(
+    result: Any,
+    repo_path: Path,
+) -> None:
+    """Persist a PipelineResult to the local SQLite database.
+
+    Handles both index-only (no pages) and full (with pages + FTS) modes.
+    """
+    from provenant.cli.helpers import get_db_url_for_repo
+    from provenant.core.persistence import (
+        FullTextSearch,
+        create_engine,
+        create_session_factory,
+        get_session,
+        init_db,
+        upsert_repository,
+    )
+    from provenant.core.pipeline import persist_pipeline_result
+
+    url = get_db_url_for_repo(repo_path)
+    engine = create_engine(url)
+    await init_db(engine)
+    sf = create_session_factory(engine)
+
+    fts = None
+    if result.generated_pages:
+        fts = FullTextSearch(engine)
+        await fts.ensure_index()
+
+    async with get_session(sf) as session:
+        repo = await upsert_repository(
+            session,
+            name=result.repo_name,
+            local_path=str(repo_path),
+        )
+        # Persist the detected tech stack into the repository's settings
+        # blob. Merge into any pre-existing settings so we don't clobber
+        # unrelated state (workspace flags, etc.). Done here rather than
+        # in upsert_repository so the persistence helper stays
+        # signature-stable.
+        if getattr(result, "tech_stack", None):
+            import json as _json
+
+            try:
+                existing = _json.loads(repo.settings_json or "{}")
+                if not isinstance(existing, dict):
+                    existing = {}
+            except Exception:
+                existing = {}
+            existing["tech_stack"] = result.tech_stack
+            repo.settings_json = _json.dumps(existing)
+        await persist_pipeline_result(result, session, repo.id)
+
+        # Record a completed GenerationJob so the web UI can show
+        # "last synced" / "last re-indexed" timestamps.
+        from datetime import UTC as _UTC
+        from datetime import datetime
+
+        from provenant.core.persistence.crud import upsert_generation_job
+
+        now = datetime.now(_UTC)
+        page_count = len(result.generated_pages) if result.generated_pages else 0
+        job = await upsert_generation_job(
+            session,
+            repository_id=repo.id,
+            status="completed",
+            total_pages=page_count,
+            config={"mode": "full_resync", "source": "cli_init"},
+        )
+        job.completed_pages = page_count
+        job.started_at = now
+        job.finished_at = now
+
+    # FTS indexing is done outside the session to avoid SQLite write conflicts
+    if fts is not None and result.generated_pages:
+        for page in result.generated_pages:
+            await fts.index(page.page_id, page.title, page.content)
+
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Workspace generation helper (per-repo)
+# ---------------------------------------------------------------------------
+
+
+def _run_workspace_generation(
+    *,
+    repo_path: Path,
+    result: Any,
+    provider: Any,
+    embedder_name_resolved: str,
+    concurrency: int,
+    yes: bool,
+    resume: bool,
+    skip_tests: bool,
+    skip_infra: bool,
+    test_run: bool,
+    reasoning: str = "auto",
+) -> list[Any]:
+    """Run LLM generation for a single repo in the workspace init flow.
+
+    Returns the list of generated pages.  Raises on unrecoverable errors so
+    the caller can catch and log per-repo failures without aborting the whole
+    workspace run.
+    """
+    from provenant.cli.cost_estimator import build_generation_plan, estimate_cost
+    from provenant.cli.helpers import get_db_url_for_repo
+    from provenant.cli.ui import RichProgressCallback
+    from provenant.core.generation import GenerationConfig
+    from provenant.core.generation.cost_tracker import CostTracker
+    from provenant.core.persistence import (
+        create_engine as _ce,
+    )
+    from provenant.core.persistence import (
+        create_session_factory as _csf,
+    )
+    from provenant.core.persistence import (
+        get_session as _gs,
+    )
+    from provenant.core.persistence import (
+        init_db as _idb,
+    )
+    from provenant.core.persistence import (
+        upsert_repository as _ur,
+    )
+    from provenant.core.persistence.vector_store import InMemoryVectorStore
+    from provenant.core.pipeline import run_generation
+    from provenant.llm.providers.embedding.base import MockEmbedder
+
+    # Build embedder
+    embedder_impl: Any
+    if embedder_name_resolved == "gemini":
+        try:
+            from provenant.llm.providers.embedding.gemini import GeminiEmbedder
+
+            embedder_impl = GeminiEmbedder()
+        except Exception:
+            embedder_impl = MockEmbedder()
+    elif embedder_name_resolved == "openai":
+        try:
+            from provenant.llm.providers.embedding.openai import OpenAIEmbedder
+
+            embedder_impl = OpenAIEmbedder()
+        except Exception:
+            embedder_impl = MockEmbedder()
+    elif embedder_name_resolved == "local":
+        try:
+            from provenant.llm.providers.embedding.local import LocalEmbedder
+
+            embedder_impl = LocalEmbedder()
+        except ImportError:
+            console.print(
+                "  [yellow]sentence-transformers not installed — run: pip install sentence-transformers[/yellow]"
+            )
+            embedder_impl = MockEmbedder()
+    else:
+        embedder_impl = MockEmbedder()
+
+    # Build vector store
+    lance_dir = repo_path / ".provenant" / "lancedb"
+    try:
+        from provenant.core.persistence.vector_store import LanceDBVectorStore
+
+        lance_dir.mkdir(parents=True, exist_ok=True)
+        vector_store: Any = LanceDBVectorStore(str(lance_dir), embedder=embedder_impl)
+    except ImportError:
+        vector_store = InMemoryVectorStore(embedder_impl)
+
+    # Cost estimate
+    gen_config = GenerationConfig(
+        max_concurrency=concurrency,
+        reasoning=resolve_reasoning(reasoning),
+    )
+    plans = build_generation_plan(
+        result.parsed_files, result.graph_builder, gen_config, skip_tests, skip_infra
+    )
+    est = estimate_cost(plans, provider.provider_name, provider.model_name)
+
+    total_tokens = est.estimated_input_tokens + est.estimated_output_tokens
+    if est.estimated_cost_usd == 0.0 and est.model_name not in ("mock",):
+        cost_str = f"[dim]cost unknown for model '{est.model_name}'[/dim]"
+    else:
+        cost_str = f"${est.estimated_cost_usd:.2f} USD"
+    console.print(
+        f"    Estimated tokens: ~{total_tokens:,} "
+        f"({cost_str}, {est.total_pages} pages)"
+    )
+
+    if (
+        est.estimated_cost_usd > 2.00
+        and not yes
+        and not _confirm_cost_gate(
+            f"    Cost for {repo_path.name} exceeds $2.00. Continue?"
+        )
+    ):
+        console.print(
+            "    [yellow]Skipped.[/yellow] "
+            "[dim]Index will be saved without docs; "
+            "future `provenant update` runs default to index-only.[/dim]"
+        )
+        # Sentinel - caller treats this exactly like an index-only run so
+        # state.docs_enabled lands as False and the post-commit hook
+        # doesn't surprise the user with LLM regen later.
+        raise CostGateDeclined()
+
+    # Cost tracker (DB-backed when possible)
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+    async def _make_cost_tracker() -> CostTracker:
+        url = get_db_url_for_repo(repo_path)
+        engine = _ce(url)
+        await _idb(engine)
+        sf = _csf(engine)
+        async with _gs(sf) as _sess:
+            _repo = await _ur(_sess, name=result.repo_name, local_path=str(repo_path))
+            _repo_id = _repo.id
+        return CostTracker(session_factory=sf, repo_id=_repo_id)
+
+    try:
+        cost_tracker = run_async(_make_cost_tracker())
+    except Exception:
+        cost_tracker = CostTracker()
+
+    provider._cost_tracker = cost_tracker
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MaybeCountColumn(),
+        TimeElapsedColumn(),
+        TextColumn("[green]${task.fields[cost]:.3f}[/green]"),
+        console=console,
+    ) as gen_progress:
+        gen_callback = RichProgressCallback(gen_progress, console)
+
+        generated_pages = run_async(
+            run_generation(
+                repo_path=repo_path,
+                parsed_files=result.parsed_files,
+                source_map=result.source_map,
+                graph_builder=result.graph_builder,
+                repo_structure=result.repo_structure,
+                git_meta_map=result.git_meta_map,
+                llm_client=provider,
+                embedder=embedder_impl,
+                vector_store=vector_store,
+                concurrency=concurrency,
+                progress=gen_callback,
+                resume=resume,
+                cost_tracker=cost_tracker,
+                generation_config=gen_config,
+            )
+        )
+
+    return generated_pages
+
+
+# ---------------------------------------------------------------------------
+# Workspace init - multi-repo flow
+# ---------------------------------------------------------------------------
+
+
+def _workspace_init(
+    *,
+    scan: Any,
+    init_all: bool,
+    exclude_patterns: list[str],
+    commit_limit: int | None,
+    follow_renames: bool,
+    no_claude_md: bool,
+    include_submodules: bool,
+    # Generation params (passed through from init_command)
+    provider_name: str | None = None,
+    model: str | None = None,
+    embedder_name: str | None = None,
+    index_only: bool = False,
+    skip_tests: bool = False,
+    skip_infra: bool = False,
+    concurrency: int = 5,
+    test_run: bool = False,
+    reasoning: str | None = None,
+    yes: bool = False,
+    dry_run: bool = False,
+    resume: bool = False,
+    force: bool = False,
+) -> None:
+    """Multi-repo workspace initialization.
+
+    Detects repos, prompts for selection and primary, creates a workspace
+    config, then runs ingestion on each repo.  When the user selects full or
+    advanced mode (interactively) or passes an explicit provider, also runs
+    LLM generation per repo.
+    """
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.ERROR)
+    logging.getLogger("httpcore").setLevel(logging.ERROR)
+    for _logger_name in ("provenant.core", "provenant.server"):
+        logging.getLogger(_logger_name).setLevel(logging.ERROR)
+    try:
+        import structlog
+
+        # cache_logger_on_first_use=False: see init_command for rationale -
+        # otherwise module-level ``structlog.get_logger`` calls hold a logger
+        # snapshotted before configure() and bypass this filter.
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(logging.ERROR),
+            cache_logger_on_first_use=False,
+        )
+    except ImportError:
+        pass
+
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+    from provenant.cli.ui import (
+        BRAND,
+        RichProgressCallback,
+        build_completion_panel,
+        format_elapsed,
+        interactive_advanced_config,
+        interactive_mode_select,
+        interactive_primary_select,
+        interactive_provider_select,
+        interactive_repo_select,
+        load_dotenv,
+        print_banner,
+    )
+    from provenant.core.pipeline import PhaseTimingRecorder, run_pipeline
+    from provenant.core.workspace import RepoEntry, WorkspaceConfig
+
+    start = time.monotonic()
+    root = scan.root
+
+    print_banner(console, repo_name=f"Workspace: {root.name}")
+    console.print(f"  Detected [bold]{len(scan.repos)}[/bold] repositories in {root}\n")
+
+    # Step 1: Select repos to index
+    if init_all:
+        selected = list(scan.repos)
+    else:
+        selected = interactive_repo_select(console, scan.repos)
+
+    if not selected:
+        console.print("[yellow]No repositories selected. Aborting.[/yellow]")
+        return
+
+    # Step 2: Select primary repo
+    if init_all:
+        primary_alias = selected[0].alias
+    else:
+        primary_alias = interactive_primary_select(console, selected)
+
+    # Determine root path (for provider resolution + dotenv)
+    primary_repo = next((r for r in selected if r.alias == primary_alias), selected[0])
+    load_dotenv(primary_repo.path)
+
+    # Step 2b: Mode selection + provider setup
+    # When running interactively with no explicit flags, present the mode menu.
+    is_interactive = sys.stdin.isatty() and provider_name is None and not index_only
+
+    embedder_name_resolved = _resolve_embedder(embedder_name)
+
+    if is_interactive:
+        mode = interactive_mode_select(console)
+        if mode == "index_only":
+            index_only = True
+        elif mode == "advanced":
+            provider_name, model = interactive_provider_select(
+                console, model, repo_path=primary_repo.path
+            )
+            adv = interactive_advanced_config(console)
+            commit_limit = adv.get("commit_limit") or commit_limit
+            follow_renames = adv.get("follow_renames", follow_renames)
+            skip_tests = adv.get("skip_tests", skip_tests)
+            skip_infra = adv.get("skip_infra", skip_infra)
+            concurrency = adv.get("concurrency", concurrency)
+            if adv.get("exclude"):
+                exclude_patterns = list(exclude_patterns) + list(adv["exclude"])
+            test_run = adv.get("test_run", test_run)
+            reasoning = adv.get("reasoning") or reasoning
+            _emb = adv.get("embedder") or embedder_name
+            if not _emb:
+                _emb = _interactive_embedder_select(console)
+            embedder_name_resolved = _resolve_embedder(_emb)
+        elif not index_only:
+            # "full" mode
+            provider_name, model = interactive_provider_select(
+                console, model, repo_path=primary_repo.path
+            )
+            if not embedder_name:
+                embedder_name_resolved = _resolve_embedder(_interactive_embedder_select(console))
+
+    # Resolve provider once (shared across all repos for generation)
+    primary_cfg = load_config(primary_repo.path)
+    resolved_reasoning = resolve_reasoning(reasoning, primary_cfg)
+    provider = None
+    if not index_only:
+        try:
+            provider = resolve_provider(provider_name, model, primary_repo.path)
+            console.print(
+                f"  Provider: [cyan]{provider.provider_name}[/cyan] / "
+                f"Model: [cyan]{provider.model_name}[/cyan]"
+            )
+            console.print(f"  Embedder: [cyan]{embedder_name_resolved}[/cyan]\n")
+            if resolved_reasoning != "auto":
+                console.print(f"  Reasoning: [cyan]{resolved_reasoning}[/cyan]\n")
+        except Exception as exc:
+            console.print(f"  [yellow]Provider setup failed ({exc}); falling back to index-only.[/yellow]")
+            index_only = True
+            provider = None
+
+    # Step 3: Create workspace config
+    entries = [
+        RepoEntry(
+            path=repo.path.relative_to(root).as_posix(),
+            alias=repo.alias,
+            is_primary=(repo.alias == primary_alias),
+        )
+        for repo in selected
+    ]
+    ws_config = WorkspaceConfig(
+        version=1,
+        repos=entries,
+        default_repo=primary_alias,
+    )
+    config_path = ws_config.save(root)
+    console.print(f"  [green]\u2713[/green] Created {config_path.name}")
+    console.print()
+
+    # Step 4: Index each selected repo (always generate_docs=False; generation is separate)
+    resolved_commit_limit = max(1, min(commit_limit or 500, 5000))
+    total_files = 0
+    total_symbols = 0
+    total_pages = 0
+    errors: list[tuple[str, str]] = []
+    # Per-repo docs outcome, surfaced in the completion panel so the user
+    # never has to guess why the web UI is missing pages for some repos.
+    # Maps alias -> (generated_count, skip_reason | None)
+    docs_outcomes: dict[str, tuple[int, str | None]] = {}
+    editor_options = resolve_editor_setup_options(
+        console,
+        disabled_project_files=get_default_disabled_project_files(
+            no_claude_md=no_claude_md,
+        ),
+    )
+
+    for i, repo in enumerate(selected, 1):
+        console.print(
+            f"  [{BRAND}][{i}/{len(selected)}][/] Indexing [bold]{repo.alias}[/bold] ({repo.path.name})..."
+        )
+        ensure_provenant_dir(repo.path)
+
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MaybeCountColumn(),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress_bar:
+                callback = PhaseTimingRecorder(RichProgressCallback(progress_bar, console))
+
+                result = run_async(
+                    run_pipeline(
+                        repo.path,
+                        commit_depth=resolved_commit_limit,
+                        follow_renames=follow_renames,
+                        exclude_patterns=exclude_patterns if exclude_patterns else None,
+                        include_submodules=include_submodules,
+                        generate_docs=False,
+                        progress=callback,
+                    )
+                )
+            repo_phase_timings: dict[str, float] = callback.timings
+
+            total_files += result.file_count
+            total_symbols += result.symbol_count
+            console.print(
+                f"    [green]\u2713[/green] {result.file_count} files, "
+                f"{result.symbol_count:,} symbols"
+            )
+
+        except Exception as exc:
+            errors.append((repo.alias, str(exc)))
+            console.print(f"    [red]\u2717 Failed: {exc}[/red]\n")
+            continue
+
+        # Generation phase (per-repo, only when not index-only).
+        # Track per-repo whether the user declined cost so state.docs_enabled
+        # reflects the actual choice instead of the original init mode.
+        repo_docs_enabled = not index_only and provider is not None
+        skip_reason: str | None = None
+        if index_only:
+            skip_reason = "index-only mode"
+        elif provider is None:
+            skip_reason = "no provider configured"
+        if not index_only and provider is not None:
+            if dry_run:
+                console.print("    [yellow]Dry run - skipping generation for this repo.[/yellow]\n")
+                skip_reason = "dry run"
+                repo_docs_enabled = False
+            else:
+                try:
+                    generated_pages = _run_workspace_generation(
+                        repo_path=repo.path,
+                        result=result,
+                        provider=provider,
+                        embedder_name_resolved=embedder_name_resolved,
+                        concurrency=concurrency,
+                        yes=yes,
+                        resume=resume,
+                        skip_tests=skip_tests,
+                        skip_infra=skip_infra,
+                        test_run=test_run,
+                        reasoning=resolved_reasoning,
+                    )
+                    result.generated_pages = generated_pages
+                    total_pages += len(generated_pages)
+                    console.print(
+                        f"    [green]\u2713[/green] Generated {len(generated_pages)} pages\n"
+                    )
+                except CostGateDeclined:
+                    repo_docs_enabled = False
+                    result.generated_pages = []
+                    skip_reason = "cost gate declined"
+                except Exception as gen_exc:
+                    console.print(f"    [yellow]Generation failed: {gen_exc}[/yellow]\n")
+                    skip_reason = f"generation error: {gen_exc}"
+                    repo_docs_enabled = False
+        else:
+            console.print()
+
+        docs_outcomes[repo.alias] = (
+            len(result.generated_pages or []),
+            None if repo_docs_enabled else skip_reason,
+        )
+
+        # Persist to repo-local DB
+        run_async(_persist_result(result, repo.path))
+
+        # Write state.json so `provenant update` knows the base commit
+        head = get_head_commit(repo.path)
+        pages_count = len(result.generated_pages or [])
+        state: dict[str, Any] = {
+            "last_sync_commit": head,
+            "total_pages": pages_count,
+            "docs_enabled": repo_docs_enabled,
+        }
+        if repo_docs_enabled and provider is not None:
+            state["provider"] = provider.provider_name
+            state["model"] = provider.model_name
+        if repo_phase_timings:
+            state["phase_timings"] = repo_phase_timings
+        save_state(repo.path, state)
+
+        # Update workspace config with indexing metadata
+        from datetime import datetime, timezone
+
+        entry = ws_config.get_repo(repo.alias)
+        if entry is not None:
+            entry.indexed_at = datetime.now(timezone.utc).isoformat()
+            entry.last_commit_at_index = head
+
+        # MCP config + editor setup files per repo
+        write_editor_project_files(
+            console,
+            repo.path,
+            options=editor_options,
+        )
+
+        # Persist provider/model config per-repo when doing full generation
+        if not index_only and provider is not None:
+            save_config(
+                repo.path,
+                provider.provider_name,
+                provider.model_name,
+                embedder_name_resolved,
+                exclude_patterns=exclude_patterns if exclude_patterns else None,
+                commit_limit=resolved_commit_limit,
+                reasoning=resolved_reasoning,
+            )
+
+    # Save workspace config with updated timestamps
+    ws_config.save(root)
+
+    # Step 5: Cross-repo analysis (co-changes, package deps, contracts)
+    indexed_aliases = [
+        repo.alias for repo in selected
+        if repo.alias not in [e[0] for e in errors]
+    ]
+    if len(indexed_aliases) >= 2:
+        console.print("  Running cross-repo analysis...")
+        try:
+            from provenant.core.workspace.update import run_cross_repo_hooks
+
+            run_async(run_cross_repo_hooks(ws_config, root, indexed_aliases))
+            console.print("  [green]OK[/green] Cross-repo analysis complete")
+        except Exception as exc:
+            console.print(f"  [yellow]Warning: Cross-repo analysis failed: {exc}[/yellow]")
+
+    # Step 6: Register primary repo with configured editor clients
+    primary_entry = ws_config.get_primary()
+    if primary_entry:
+        primary_path = (root / primary_entry.path).resolve()
+        register_editor_clients(console, primary_path)
+
+    # Step 7: Completion summary
+    elapsed = time.monotonic() - start
+    metrics: list[tuple[str, str]] = [
+        ("Repositories", f"{len(selected) - len(errors)} indexed"),
+        ("Total files", str(total_files)),
+        ("Total symbols", f"{total_symbols:,}"),
+        ("Primary repo", primary_alias),
+        ("Elapsed", format_elapsed(elapsed)),
+    ]
+    if not index_only and provider is not None:
+        metrics.insert(3, ("Pages generated", str(total_pages)))
+        metrics.insert(4, ("Provider", f"{provider.provider_name} / {provider.model_name}"))
+    if errors:
+        metrics.append(("Errors", f"{len(errors)} repos failed"))
+
+    if index_only or provider is None:
+        next_steps = [
+            ("provenant mcp <repo-path>", "start MCP server for a repo"),
+            ("provenant status --workspace", "show workspace status"),
+            ("provenant init <repo> --provider gemini", "generate full docs for a repo"),
+        ]
+    else:
+        next_steps = [
+            ("provenant mcp <repo-path>", "start MCP server for a repo"),
+            ("provenant status --workspace", "show workspace status"),
+            ("provenant search <query>", "search across all indexed repos"),
+        ]
+
+    console.print()
+    console.print(
+        build_completion_panel("provenant workspace init complete", metrics, next_steps=next_steps)
+    )
+    console.print()
+
+    # Honest docs status - print a per-repo summary listing exactly which
+    # repos generated pages and which were skipped, so the user never has
+    # to discover empty Docs/Overview in the web UI on their own.
+    docs_skipped = [
+        (alias, reason) for alias, (count, reason) in docs_outcomes.items() if reason
+    ]
+    docs_generated = [
+        (alias, count) for alias, (count, reason) in docs_outcomes.items() if not reason
+    ]
+    if docs_outcomes:
+        console.print("[bold]Docs status[/bold]")
+        for alias, (count, reason) in docs_outcomes.items():
+            if reason:
+                console.print(
+                    f"  [yellow]x[/yellow] {alias:<20} [yellow]skipped[/yellow]  [dim]({reason})[/dim]"
+                )
+            else:
+                console.print(
+                    f"  [green]OK[/green] {alias:<20} [green]{count} pages[/green]"
+                )
+        if docs_skipped:
+            first = docs_skipped[0][0]
+            console.print()
+            console.print(
+                f"  Run [bold]provenant update --repo {first} --docs[/bold] "
+                "to generate docs for a skipped repo."
+            )
+        console.print()
+
+    # Offer to install post-commit hooks
+    indexed_repos = [
+        repo for repo in selected
+        if repo.alias not in [e[0] for e in errors]
+    ]
+    if indexed_repos:
+        _offer_hook_install(
+            console,
+            [r.path for r in indexed_repos],
+            aliases=[r.alias for r in indexed_repos],
+        )
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# CLI command
+# ---------------------------------------------------------------------------
+
+
+@click.command("init")
+@click.argument("path", required=False, default=None)
+@click.option(
+    "--provider",
+    "provider_name",
+    default=None,
+    help=(
+        "LLM provider name (anthropic, openai, openrouter, gemini, "
+        "deepseek, ollama, litellm, mock)."
+    ),
+)
+@click.option("--model", default=None, help="Model identifier override.")
+@click.option(
+    "--embedder",
+    "embedder_name",
+    default=None,
+    type=click.Choice(["local", "openai", "gemini", "none", "mock"]),
+    help="Embedder for semantic search: local | openai | gemini | none (default: auto-detect).",
+)
+@click.option("--skip-tests", is_flag=True, default=False, help="Skip test files.")
+@click.option("--skip-infra", is_flag=True, default=False, help="Skip infrastructure files.")
+@click.option(
+    "--dry-run", is_flag=True, default=False, help="Show generation plan without running."
+)
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip cost confirmation prompt.")
+@click.option("--resume", is_flag=True, default=False, help="Resume from last checkpoint.")
+@click.option(
+    "--force", is_flag=True, default=False, help="Regenerate all pages, ignoring existing."
+)
+@click.option("--concurrency", type=int, default=5, help="Max concurrent LLM calls.")
+@click.option(
+    "--reasoning",
+    type=click.Choice(["auto", "off", "minimal"]),
+    default=None,
+    help="Reasoning mode for supported providers: auto, off, or minimal. Default: auto.",
+)
+@click.option(
+    "--test-run",
+    is_flag=True,
+    default=False,
+    help="Limit generation to top 10 files by PageRank for quick validation.",
+)
+@click.option(
+    "--index-only",
+    is_flag=True,
+    default=False,
+    help="Index files, git history, graph, and dead code - skip LLM page generation.",
+)
+@click.option(
+    "--exclude",
+    "-x",
+    multiple=True,
+    metavar="PATTERN",
+    help="Gitignore-style pattern to exclude. Can be repeated: -x vendor/ -x 'src/generated/**'",
+)
+@click.option(
+    "--commit-limit",
+    type=int,
+    default=None,
+    help="Max commits to analyze per file and for co-change detection (default: 500, max: 5000). Saved to config.",
+)
+@click.option(
+    "--follow-renames",
+    is_flag=True,
+    default=False,
+    help="Use git log --follow to track files across renames (slower but more accurate history). Saved to config.",
+)
+@click.option(
+    "--no-claude-md",
+    "no_claude_md",
+    is_flag=True,
+    default=False,
+    help="Skip generating CLAUDE.md. Saves 'editor_files.claude_md: false' to config.",
+)
+@click.option(
+    "--include-submodules",
+    is_flag=True,
+    default=False,
+    help="Include git submodule directories (excluded by default).",
+)
+@click.option(
+    "--all",
+    "init_all",
+    is_flag=True,
+    default=False,
+    help="In multi-repo mode, index all detected repos without prompting.",
+)
+def init_command(
+    path: str | None,
+    provider_name: str | None,
+    model: str | None,
+    embedder_name: str | None,
+    skip_tests: bool,
+    skip_infra: bool,
+    dry_run: bool,
+    yes: bool,
+    resume: bool,
+    force: bool,
+    concurrency: int,
+    reasoning: str | None,
+    test_run: bool,
+    index_only: bool,
+    exclude: tuple[str, ...],
+    commit_limit: int | None,
+    follow_renames: bool,
+    no_claude_md: bool,
+    include_submodules: bool,
+    init_all: bool,
+) -> None:
+    """Generate wiki documentation for a codebase.
+
+    PATH defaults to the current directory.
+    Use --index-only to run ingestion (AST, graph, git, dead code) without LLM generation.
+    """
+    from provenant.cli.ui import (
+        BRAND,
+        RichProgressCallback,
+        build_analysis_summary_panel,
+        build_completion_panel,
+        build_contextual_next_steps,
+        format_elapsed,
+        interactive_advanced_config,
+        interactive_mode_select,
+        interactive_provider_select,
+        load_dotenv,
+        print_banner,
+        print_index_only_intro,
+        print_phase_header,
+        print_scan_summary,
+        quick_repo_scan,
+    )
+
+    start = time.monotonic()
+    repo_path = resolve_repo_path(path)
+
+    if not repo_path.is_dir():
+        raise click.ClickException(f"Not a directory: {repo_path}")
+
+    # ---- Workspace detection ----
+    # If the path contains multiple git repos (and is not itself a single repo),
+    # branch into the multi-repo workspace flow.
+    from provenant.core.workspace import scan_for_repos
+
+    scan = scan_for_repos(repo_path, include_submodules=include_submodules)
+    if len(scan.repos) > 1:
+        _workspace_init(
+            scan=scan,
+            init_all=init_all,
+            exclude_patterns=list(exclude),
+            commit_limit=commit_limit,
+            follow_renames=follow_renames,
+            no_claude_md=no_claude_md,
+            include_submodules=include_submodules,
+            provider_name=provider_name,
+            model=model,
+            embedder_name=embedder_name,
+            index_only=index_only,
+            skip_tests=skip_tests,
+            skip_infra=skip_infra,
+            concurrency=concurrency,
+            reasoning=reasoning,
+            test_run=test_run,
+            yes=yes,
+            dry_run=dry_run,
+            resume=resume,
+            force=force,
+        )
+        return
+
+    # If a single repo was found inside the given directory (not at root),
+    # redirect to it so the user doesn't have to specify the exact path.
+    if len(scan.repos) == 1 and scan.repos[0].path != repo_path:
+        repo_path = scan.repos[0].path
+
+    ensure_provenant_dir(repo_path)
+    load_dotenv(repo_path)
+
+    # Suppress library/structlog output - progress bars are the only output needed.
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.ERROR)
+    logging.getLogger("httpcore").setLevel(logging.ERROR)
+    for _logger_name in ("provenant.core", "provenant.server"):
+        logging.getLogger(_logger_name).setLevel(logging.ERROR)
+
+    try:
+        import structlog
+
+        # Without cache_logger_on_first_use=False, modules that called
+        # ``structlog.get_logger(__name__)`` at import time hold a bound logger
+        # snapshotted before this configure ran - so debug lines from
+        # ``core/ingestion/*`` (graph, traverser, parser, etc.) would leak past
+        # the ERROR filter on the first ``init`` of a session.
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(logging.ERROR),
+            cache_logger_on_first_use=False,
+        )
+    except ImportError:
+        pass
+
+    # ---- Interactive mode (TTY, no explicit flags) ----
+    is_interactive = sys.stdin.isatty() and provider_name is None and not index_only
+
+    # Pre-scan for interactive mode - fast stats to inform choices
+    scan_info = None
+    if is_interactive:
+        print_banner(console, repo_name=repo_path.name)
+        with console.status("  Scanning repository...", spinner="dots"):
+            scan_info = quick_repo_scan(repo_path)
+        print_scan_summary(console, scan_info)
+        mode = interactive_mode_select(console)
+
+        if mode == "index_only":
+            index_only = True
+        elif mode == "advanced":
+            provider_name, model = interactive_provider_select(console, model, repo_path=repo_path)
+            adv = interactive_advanced_config(console, scan=scan_info)
+            commit_limit = adv["commit_limit"]
+            follow_renames = adv["follow_renames"]
+            skip_tests = adv["skip_tests"]
+            skip_infra = adv["skip_infra"]
+            concurrency = adv["concurrency"]
+            reasoning = adv.get("reasoning") or reasoning
+            exclude = adv["exclude"]
+            test_run = adv["test_run"]
+            embedder_name = adv.get("embedder") or embedder_name
+            include_submodules = adv.get("include_submodules", include_submodules)
+            if not embedder_name:
+                embedder_name = _interactive_embedder_select(console)
+        else:
+            provider_name, model = interactive_provider_select(console, model, repo_path=repo_path)
+            if embedder_name is None:
+                embedder_name = _interactive_embedder_select(console)
+
+    editor_options = resolve_editor_setup_options(
+        console,
+        disabled_project_files=get_default_disabled_project_files(
+            no_claude_md=no_claude_md,
+        ),
+        prompt_for_project_files=is_interactive and not index_only,
+    )
+
+    # Merge exclude_patterns from config.yaml and --exclude/-x flags
+    config = load_config(repo_path)
+    language = config.get("language", "en")
+    resolved_reasoning = resolve_reasoning(reasoning, config)
+    exclude_patterns: list[str] = list(config.get("exclude_patterns") or []) + list(exclude)
+
+    # Resolve commit limit: CLI flag -> config.yaml -> default (500)
+    resolved_commit_limit: int = commit_limit or config.get("commit_limit") or 500
+    resolved_commit_limit = max(1, min(resolved_commit_limit, 5000))
+    if commit_limit is not None:
+        config["commit_limit"] = resolved_commit_limit
+
+    # Resolve follow_renames: CLI flag -> config.yaml
+    resolved_follow_renames: bool = follow_renames or config.get("follow_renames", False)
+    if follow_renames:
+        config["follow_renames"] = True
+
+    embedder_name_resolved = _resolve_embedder(embedder_name)
+
+    # ---- Resolve provider ----
+    provider = None
+    decision_provider = None
+
+    if index_only:
+        try:
+            if (
+                provider_name
+                or (sys.stdin.isatty() is False)
+                or any(
+                    os.environ.get(k)
+                    for k in (
+                        "GEMINI_API_KEY",
+                        "GOOGLE_API_KEY",
+                        "OPENAI_API_KEY",
+                        "ANTHROPIC_API_KEY",
+                    )
+                )
+            ):
+                decision_provider = resolve_provider(provider_name, model, repo_path)
+        except Exception:
+            pass
+
+        has_provider = decision_provider is not None
+        if is_interactive:
+            print_index_only_intro(console, has_provider=has_provider)
+        else:
+            console.print(f"[bold]provenant index-only[/bold] - {repo_path}")
+            console.print("[yellow]Skipping LLM page generation (--index-only)[/yellow]")
+            if decision_provider:
+                console.print(
+                    f"Decision extraction provider: [cyan]{decision_provider.provider_name}[/cyan]"
+                )
+    else:
+        if not is_interactive and provider_name is None and sys.stdin.isatty():
+            from provenant.cli.ui import interactive_provider_select as _ips
+
+            provider_name, model = _ips(console, model)
+
+        from provenant.llm.providers.llm.base import ProviderError
+
+        retried_model_prompt = False
+        while True:
+            provider = resolve_provider(provider_name, model, repo_path)
+            if not is_interactive:
+                console.print(f"[bold]provenant init[/bold] - {repo_path}")
+            console.print(
+                f"  Provider: [cyan]{provider.provider_name}[/cyan] / Model: [cyan]{provider.model_name}[/cyan]"
+            )
+            console.print(f"  Embedder: [cyan]{embedder_name_resolved}[/cyan]")
+            if language != "en":
+                console.print(f"  Language: [cyan]{language}[/cyan]")
+            if resolved_reasoning != "auto":
+                console.print(f"  Reasoning: [cyan]{resolved_reasoning}[/cyan]")
+
+            validation_error: ProviderError | None = None
+            with console.status("  Verifying provider connection...", spinner="dots"):
+                try:
+                    run_async(
+                        provider.generate(
+                            "You are a test.",
+                            "Reply with OK.",
+                            max_tokens=50,
+                            reasoning=resolved_reasoning,
+                        )
+                    )
+                    break
+                except ProviderError as exc:
+                    validation_error = exc
+
+            if validation_error is None:
+                break
+
+            message = str(validation_error).lower()
+            is_auth_error = any(t in message for t in ("401", "invalid_api_key", "incorrect api key", "authentication", "unauthorized"))
+            if is_interactive and not retried_model_prompt and "model" in message:
+                from provenant.cli.ui import _PROVIDER_DEFAULTS, prompt_model_select
+
+                console.print(
+                    f"  [yellow]Model validation failed:[/yellow] {validation_error}"
+                )
+                model = prompt_model_select(
+                    console,
+                    provider_name or provider.provider_name,
+                    _PROVIDER_DEFAULTS.get(
+                        provider_name or provider.provider_name,
+                        provider.model_name,
+                    ),
+                    None,
+                )
+                retried_model_prompt = True
+                continue
+            if is_interactive and is_auth_error:
+                from provenant.cli.ui import interactive_provider_select as _ips
+
+                current_key = os.environ.get(
+                    {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                     "gemini": "GEMINI_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}.get(
+                        provider_name or provider.provider_name, "OPENAI_API_KEY"
+                    ), ""
+                )
+                hint = ""
+                if current_key.startswith("fw_"):
+                    hint = " (fw_... is a Fireworks key — needs OPENAI_BASE_URL or a different provider)"
+                elif current_key.startswith("sk-ant-"):
+                    hint = " (sk-ant-... is an Anthropic key — select the anthropic provider)"
+                console.print(f"  [yellow]API key rejected (401){hint}[/yellow]")
+                console.print("  Select a different provider or press Ctrl+C to exit.")
+                provider_name, model = _ips(console, model, repo_path=repo_path)
+                retried_model_prompt = False
+                continue
+            raise click.ClickException(
+                f"Provider validation failed: {validation_error}"
+            ) from validation_error
+        console.print("  [green]OK[/green] Provider connection verified")
+
+    # ---- Phase 1 & 2: Ingestion + Analysis (always) ----
+    total_phases = 3 if index_only else 4
+    # Tracks whether the user declined the LLM cost gate. When True we
+    # skip generation but still persist the index/graph/git/dead-code so
+    # the run isn't wasted, and propagate the choice to state.docs_enabled
+    # so subsequent updates default to index-only.
+    cost_declined = False
+    llm_client = provider if not index_only else decision_provider
+
+    from provenant.core.pipeline import PhaseTimingRecorder, run_pipeline
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MaybeCountColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress_bar:
+        rich_callback = RichProgressCallback(progress_bar, console)
+        # Wrap the Rich callback so we can record per-phase wall-clock
+        # durations without changing the pipeline API. Timings get
+        # persisted to state.json below.
+        callback = PhaseTimingRecorder(rich_callback)
+
+        # Always run ingestion + analysis first (generate_docs=False).
+        # Generation happens separately after cost confirmation.
+        result = run_async(
+            run_pipeline(
+                repo_path,
+                commit_depth=resolved_commit_limit,
+                follow_renames=resolved_follow_renames,
+                skip_tests=skip_tests,
+                skip_infra=skip_infra,
+                exclude_patterns=exclude_patterns if exclude_patterns else None,
+                include_submodules=include_submodules,
+                generate_docs=False,
+                llm_client=llm_client,
+                concurrency=concurrency,
+                test_run=test_run,
+                progress=callback,
+            )
+        )
+
+    # Surface per-phase timing data to the caller - both for the
+    # state.json persistence below and for any future "profile" tooling
+    # that wants to introspect a run.
+    phase_timings: dict[str, float] = callback.timings
+
+    # ---- Analysis summary (shown between analysis and generation) ----
+    _graph = result.graph_builder.graph()
+    _dc_unreachable_pre = sum(
+        1
+        for f in (result.dead_code_report.findings if result.dead_code_report else [])
+        if f.kind.value == "unreachable_file"
+    )
+    _dc_unused_pre = sum(
+        1
+        for f in (result.dead_code_report.findings if result.dead_code_report else [])
+        if f.kind.value == "unused_export"
+    )
+    _dc_lines_pre = result.dead_code_report.deletable_lines if result.dead_code_report else 0
+    _n_decisions_pre = (
+        sum(result.decision_report.by_source.values()) if result.decision_report else 0
+    )
+    _lang_dist = result.repo_structure.root_language_distribution
+    _lang_summary = ""
+    if _lang_dist:
+        _top = sorted(_lang_dist.items(), key=lambda x: -x[1])[:4]
+        _lang_summary = ", ".join(f"{lang} {pct:.0%}" for lang, pct in _top)
+        if len(_lang_dist) > 4:
+            _lang_summary += f" +{len(_lang_dist) - 4} more"
+
+    # Community count (best-effort)
+    _community_count = 0
+    try:
+        if hasattr(result.graph_builder, "communities"):
+            _community_count = len(result.graph_builder.communities())
+    except Exception:
+        pass
+
+    console.print()
+    console.print(
+        build_analysis_summary_panel(
+            file_count=result.file_count,
+            symbol_count=result.symbol_count,
+            graph_nodes=_graph.number_of_nodes(),
+            graph_edges=_graph.number_of_edges(),
+            dead_unreachable=_dc_unreachable_pre,
+            dead_unused=_dc_unused_pre,
+            dead_lines=_dc_lines_pre,
+            decision_count=_n_decisions_pre,
+            git_files=result.git_summary.files_indexed if result.git_summary else 0,
+            hotspot_count=result.git_summary.hotspots
+            if result.git_summary and hasattr(result.git_summary, "hotspots")
+            else 0,
+            community_count=_community_count,
+            lang_summary=_lang_summary,
+        )
+    )
+
+    # ---- Phase 3: Generation (full mode only) ----
+    if not index_only:
+        print_phase_header(
+            console,
+            3,
+            total_phases,
+            "Generation",
+            f"Generating wiki pages with {provider.provider_name} / {provider.model_name}",
+        )
+
+        # Cost estimation
+        from provenant.core.generation import GenerationConfig
+        gen_config = GenerationConfig(
+            max_concurrency=concurrency,
+            language=language,
+            reasoning=resolved_reasoning,
+        )
+        plans = build_generation_plan(
+            result.parsed_files, result.graph_builder, gen_config, skip_tests, skip_infra
+        )
+        est = estimate_cost(plans, provider.provider_name, provider.model_name)
+
+        table = Table(title="Generation Plan", border_style=BRAND)
+        table.add_column("Page Type", style="cyan")
+        table.add_column("Count", justify="right")
+        table.add_column("Level", justify="right")
+        for plan in est.plans:
+            table.add_row(plan.page_type, str(plan.count), str(plan.level))
+        table.add_section()
+        table.add_row("[bold]Total[/bold]", f"[bold]{est.total_pages}[/bold]", "")
+        console.print(table)
+
+        # Language breakdown
+        lang_dist = result.repo_structure.root_language_distribution
+        if lang_dist:
+            lang_items = sorted(lang_dist.items(), key=lambda x: -x[1])[:6]
+            lang_parts = [f"{lang} {pct:.0%}" for lang, pct in lang_items]
+            console.print(f"  Languages: {', '.join(lang_parts)}")
+
+        _total_tokens = est.estimated_input_tokens + est.estimated_output_tokens
+        if est.estimated_cost_usd == 0.0 and est.model_name not in ("mock",):
+            _cost_str = f"[dim]cost unknown for model '{est.model_name}'[/dim]"
+        else:
+            _cost_str = f"${est.estimated_cost_usd:.2f} USD"
+        console.print(
+            f"  Estimated tokens: ~{_total_tokens:,} ({_cost_str})"
+        )
+        console.print()
+
+        if dry_run:
+            console.print("[yellow]Dry run - no pages generated.[/yellow]")
+            return
+
+        cost_declined = (
+            est.estimated_cost_usd > 2.00
+            and not yes
+            and not _confirm_cost_gate("  Estimated cost exceeds $2.00. Continue?")
+        )
+        if cost_declined:
+            console.print(
+                "[yellow]Skipped LLM generation.[/yellow] "
+                "[dim]Index/graph/git/dead-code will be saved; future "
+                "`provenant update` runs default to index-only so the "
+                "post-commit hook won't trigger LLM regen.[/dim]"
+            )
+
+        if not cost_declined:
+            # Build embedder + vector store
+            from provenant.core.persistence.vector_store import InMemoryVectorStore
+            from provenant.llm.providers.embedding.base import MockEmbedder
+
+            embedder_impl: Any
+            if embedder_name_resolved == "gemini":
+                try:
+                    from provenant.llm.providers.embedding.gemini import GeminiEmbedder
+
+                    embedder_impl = GeminiEmbedder()
+                except Exception:
+                    embedder_impl = MockEmbedder()
+            elif embedder_name_resolved == "openai":
+                try:
+                    from provenant.llm.providers.embedding.openai import OpenAIEmbedder
+
+                    embedder_impl = OpenAIEmbedder()
+                except Exception:
+                    embedder_impl = MockEmbedder()
+            elif embedder_name_resolved == "local":
+                try:
+                    from provenant.llm.providers.embedding.local import LocalEmbedder
+
+                    embedder_impl = LocalEmbedder()
+                except ImportError:
+                    console.print(
+                        "  [yellow]sentence-transformers not installed — run: pip install sentence-transformers[/yellow]"
+                    )
+                    embedder_impl = MockEmbedder()
+            else:
+                embedder_impl = MockEmbedder()
+
+            lance_dir = repo_path / ".provenant" / "lancedb"
+            try:
+                from provenant.core.persistence.vector_store import LanceDBVectorStore
+
+                lance_dir.mkdir(parents=True, exist_ok=True)
+                vector_store: Any = LanceDBVectorStore(str(lance_dir), embedder=embedder_impl)
+            except ImportError:
+                vector_store = InMemoryVectorStore(embedder_impl)
+
+            # Run generation via the pipeline's generation function
+            from provenant.core.pipeline import run_generation
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MaybeCountColumn(),
+                TimeElapsedColumn(),
+                TextColumn("[green]${task.fields[cost]:.3f}[/green]"),
+                console=console,
+            ) as gen_progress:
+                gen_callback = RichProgressCallback(gen_progress, console)
+
+                # Construct a CostTracker backed by the real DB so every LLM call
+                # is persisted to the llm_costs table.  We need the repo_id from the
+                # database row that was created/upserted during _persist_result
+                # (which has not run yet), so we look it up or fall back to in-memory.
+                from provenant.cli.helpers import get_db_url_for_repo
+                from provenant.core.generation.cost_tracker import CostTracker
+                from provenant.core.persistence import (
+                    create_engine as _create_engine,
+                )
+                from provenant.core.persistence import (
+                    create_session_factory as _create_sf,
+                )
+                from provenant.core.persistence import (
+                    get_session as _get_session,
+                )
+                from provenant.core.persistence import (
+                    init_db as _init_db,
+                )
+                from provenant.core.persistence import (
+                    upsert_repository as _upsert_repo,
+                )
+
+                async def _make_cost_tracker() -> CostTracker:
+                    url = get_db_url_for_repo(repo_path)
+                    engine = _create_engine(url)
+                    await _init_db(engine)
+                    sf = _create_sf(engine)
+                    async with _get_session(sf) as _sess:
+                        _repo = await _upsert_repo(
+                            _sess,
+                            name=result.repo_name,
+                            local_path=str(repo_path),
+                        )
+                        _repo_id = _repo.id
+                    # Keep engine alive for the duration of generation - it will be
+                    # disposed by _persist_result's own engine later.
+                    return CostTracker(session_factory=sf, repo_id=_repo_id)
+
+                try:
+                    cost_tracker = run_async(_make_cost_tracker())
+                except Exception:
+                    # Fallback to in-memory tracker if DB setup fails
+                    cost_tracker = CostTracker()
+
+                # Attach tracker to provider unconditionally (all providers now
+                # accept _cost_tracker as an attribute)
+                provider._cost_tracker = cost_tracker
+
+                generated_pages = run_async(
+                    run_generation(
+                        repo_path=repo_path,
+                        parsed_files=result.parsed_files,
+                        source_map=result.source_map,
+                        graph_builder=result.graph_builder,
+                        repo_structure=result.repo_structure,
+                        git_meta_map=result.git_meta_map,
+                        llm_client=provider,
+                        embedder=embedder_impl,
+                        vector_store=vector_store,
+                        concurrency=concurrency,
+                        progress=gen_callback,
+                        resume=resume,
+                        cost_tracker=cost_tracker,
+                        generation_config=gen_config,
+                    )
+                )
+
+            result.generated_pages = generated_pages
+            console.print(f"  [green]OK[/green] Generated [bold]{len(generated_pages)}[/bold] pages")
+
+    # ---- Persistence ----
+    # `cost_declined` short-circuits any further LLM work for the rest of
+    # this run, so persistence/state below treat it as index-only.
+    effective_index_only = index_only or cost_declined
+    if effective_index_only:
+        print_phase_header(console, 3, total_phases, "Persistence", "Saving to database")
+    else:
+        print_phase_header(
+            console, 4, total_phases, "Persistence", "Saving to database and building search index"
+        )
+
+    with console.status("  Persisting to database...", spinner="dots"):
+        run_async(_persist_result(result, repo_path))
+    console.print("  [green]OK[/green] Database updated")
+
+    # ---- Post-run: config, state, MCP, editor project files ----
+    if commit_limit is not None:
+        cfg = load_config(repo_path)
+        cfg["commit_limit"] = resolved_commit_limit
+        try:
+            import yaml  # type: ignore[import-untyped]
+
+            cfg_path = repo_path / ".provenant" / "config.yaml"
+            cfg_path.write_text(
+                yaml.dump(cfg, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+        except ImportError:
+            pass
+
+    write_editor_project_files(
+        console,
+        repo_path,
+        options=editor_options,
+    )
+    register_editor_clients(console, repo_path)
+
+    # ---- State (always) ----
+    # Even in index-only mode we persist `last_sync_commit` so that a
+    # subsequent `provenant update` (e.g. fired by the post-commit hook) has
+    # a baseline to diff against. Without this, index-only users hit
+    # "No previous sync found" on every update.
+    head = get_head_commit(repo_path)
+    base_state = load_state(repo_path)
+    base_state["last_sync_commit"] = head
+    base_state["docs_enabled"] = not effective_index_only and provider is not None
+    if phase_timings:
+        base_state["phase_timings"] = phase_timings
+    if effective_index_only or provider is None:
+        save_state(repo_path, base_state)
+
+    # ---- State + config (full mode only) ----
+    if not effective_index_only and provider:
+
+        async def _count_db_pages() -> int:
+            from sqlalchemy import func as sa_func
+            from sqlalchemy import select as sa_select
+
+            from provenant.cli.helpers import get_db_url_for_repo as _get_url
+            from provenant.core.persistence import create_engine, create_session_factory, get_session
+            from provenant.core.persistence.models import Page, Repository
+
+            _engine = create_engine(_get_url(repo_path))
+            _sf = create_session_factory(_engine)
+            async with get_session(_sf) as _sess:
+                repo_result = await _sess.execute(
+                    sa_select(Repository.id).where(Repository.local_path == str(repo_path))
+                )
+                _repo_id = repo_result.scalar_one_or_none()
+                if _repo_id is None:
+                    await _engine.dispose()
+                    return len(result.generated_pages or [])
+
+                count_result = await _sess.execute(
+                    sa_select(sa_func.count())
+                    .select_from(Page)
+                    .where(Page.repository_id == _repo_id)
+                )
+                count = count_result.scalar_one()
+            await _engine.dispose()
+            return count
+
+        head = get_head_commit(repo_path)
+        state = load_state(repo_path)
+        state["last_sync_commit"] = head
+        state["total_pages"] = run_async(_count_db_pages())
+        state["provider"] = provider.provider_name
+        state["model"] = provider.model_name
+        state["docs_enabled"] = True
+        total_tokens = sum(p.total_tokens for p in (result.generated_pages or []))
+        state["total_tokens"] = total_tokens
+        if phase_timings:
+            state["phase_timings"] = phase_timings
+        save_state(repo_path, state)
+
+        save_config(
+            repo_path,
+            provider.provider_name,
+            provider.model_name,
+            embedder_name_resolved,
+            exclude_patterns=exclude_patterns if exclude_patterns else None,
+            commit_limit=resolved_commit_limit if commit_limit is not None else None,
+            reasoning=resolved_reasoning,
+        )
+
+    # ---- Completion panel ----
+    elapsed = time.monotonic() - start
+
+    _graph_final = result.graph_builder.graph()
+    _dc_unreachable = sum(
+        1
+        for f in (result.dead_code_report.findings if result.dead_code_report else [])
+        if f.kind.value == "unreachable_file"
+    )
+    _dc_unused = sum(
+        1
+        for f in (result.dead_code_report.findings if result.dead_code_report else [])
+        if f.kind.value == "unused_export"
+    )
+    _n_decisions = sum(result.decision_report.by_source.values()) if result.decision_report else 0
+    _hotspot_count_final = (
+        result.git_summary.hotspots
+        if result.git_summary and hasattr(result.git_summary, "hotspots")
+        else 0
+    )
+
+    # Find top hotspot file for contextual next steps
+    _top_hotspot = ""
+    if result.git_meta_map:
+        _by_churn = sorted(
+            result.git_meta_map.items(),
+            key=lambda x: x[1].get("commit_count", 0),
+            reverse=True,
+        )
+        if _by_churn:
+            _top_hotspot = _by_churn[0][0]
+            # Shorten to basename for display
+            if "/" in _top_hotspot:
+                _top_hotspot = _top_hotspot.rsplit("/", 1)[-1]
+
+    # Build a compact language summary for the completion panel
+    _lang_dist_final = result.repo_structure.root_language_distribution
+    if _lang_dist_final:
+        _top_final = sorted(_lang_dist_final.items(), key=lambda x: -x[1])[:4]
+        _lang_summary_final = ", ".join(f"{lang} {pct:.0%}" for lang, pct in _top_final)
+        if len(_lang_dist_final) > 4:
+            _lang_summary_final += f" +{len(_lang_dist_final) - 4} more"
+    else:
+        _lang_summary_final = str(len(result.languages))
+
+    if effective_index_only:
+        metrics: list[tuple[str, str]] = [
+            ("Files indexed", str(result.file_count)),
+            ("Symbols", f"{result.symbol_count:,}"),
+            ("Languages", _lang_summary_final),
+            ("Elapsed", format_elapsed(elapsed)),
+            ("", ""),
+            (
+                "Graph",
+                f"{_graph_final.number_of_nodes()} nodes * {_graph_final.number_of_edges()} edges",
+            ),
+            ("Dead code", f"{_dc_unreachable} unreachable * {_dc_unused} unused exports"),
+            ("Decisions", str(_n_decisions)),
+        ]
+        if result.git_summary:
+            metrics.append(
+                (
+                    "Git history",
+                    f"{result.git_summary.files_indexed} files * {_hotspot_count_final} hotspots",
+                )
+            )
+
+        next_steps = build_contextual_next_steps(
+            index_only=True,
+            dead_unreachable=_dc_unreachable,
+            dead_unused=_dc_unused,
+            hotspot_count=_hotspot_count_final,
+            decision_count=_n_decisions,
+            top_hotspot=_top_hotspot,
+        )
+        console.print()
+        console.print(
+            build_completion_panel("provenant index complete", metrics, next_steps=next_steps)
+        )
+        console.print()
+    else:
+        total_tokens = sum(p.total_tokens for p in (result.generated_pages or []))
+        metrics = [
+            ("Pages generated", str(len(result.generated_pages or []))),
+            ("Total tokens", f"{total_tokens:,}"),
+            ("Provider", f"{provider.provider_name} / {provider.model_name}"),
+            ("Elapsed", format_elapsed(elapsed)),
+            ("", ""),
+            ("Dead code", f"{_dc_unreachable} unreachable * {_dc_unused} unused exports"),
+            ("Decisions", str(_n_decisions)),
+        ]
+        if result.git_summary:
+            metrics.append(
+                (
+                    "Git history",
+                    f"{result.git_summary.files_indexed} files * {_hotspot_count_final} hotspots",
+                )
+            )
+
+        next_steps = build_contextual_next_steps(
+            index_only=False,
+            dead_unreachable=_dc_unreachable,
+            dead_unused=_dc_unused,
+            hotspot_count=_hotspot_count_final,
+            decision_count=_n_decisions,
+            top_hotspot=_top_hotspot,
+        )
+
+        from provenant.cli.mcp_config import format_setup_instructions
+
+        console.print()
+        console.print(
+            build_completion_panel("provenant init complete", metrics, next_steps=next_steps)
+        )
+        console.print()
+        console.print(format_setup_instructions(repo_path))
+        console.print()
+
+    # Offer to install post-commit hook (both index-only and full modes)
+    _offer_hook_install(console, [repo_path])

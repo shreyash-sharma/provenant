@@ -1,0 +1,165 @@
+Create a Provenant wiki page for `{{ ctx.file_path }}`.
+
+Use the evidence below as facts. Do not invent behavior. Keep paths, symbol names,
+and signatures exact. Write the final page in Markdown with these sections:
+`## Overview`, `## Public API`, `## Dependencies`, and `## Usage Notes`.
+
+### File facts
+- Path: `{{ ctx.file_path }}`
+- Language: {{ ctx.language }}
+- PageRank: {{ "%.4f"|format(ctx.pagerank_score) }}
+- Betweenness: {{ "%.4f"|format(ctx.betweenness_score) }}
+- Community ID: {{ ctx.community_id }}
+- API contract: {{ ctx.is_api_contract }}
+- Entry point: {{ ctx.is_entry_point }}
+- Test file: {{ ctx.is_test }}
+{% if ctx.docstring %}
+- Module docstring: {{ ctx.docstring }}
+{% endif %}
+
+### Symbols
+{% if ctx.symbols %}
+{% for sym in ctx.symbols %}
+- `{{ sym.name }}` ({{ sym.kind }}): `{{ sym.signature }}`{% if sym.docstring %} - {{ sym.docstring }}{% endif %}
+{% endfor %}
+{% else %}
+- No symbols were extracted.
+{% endif %}
+
+### Imports
+{% if ctx.imports %}
+{% for imp in ctx.imports %}
+- `{{ imp }}`
+{% endfor %}
+{% else %}
+- No imports were extracted.
+{% endif %}
+
+### Exports
+{% if ctx.exports %}
+{% for exp in ctx.exports %}
+- `{{ exp }}`
+{% endfor %}
+{% else %}
+- No explicit exports were extracted.
+{% endif %}
+
+### Files this file depends on
+{% if ctx.dependencies %}
+{% for dep in ctx.dependencies %}
+{% set summary = ctx.dependency_summaries.get(dep, '') %}
+- `{{ dep }}`{% if summary %}: {{ summary }}{% endif %}
+{% endfor %}
+{% else %}
+- No internal dependencies were detected.
+{% endif %}
+
+### Files depending on this file
+{% if ctx.dependents %}
+{% for dep in ctx.dependents %}
+- `{{ dep }}`
+{% endfor %}
+{% else %}
+- No internal dependents were detected.
+{% endif %}
+
+{% if ctx.dependency_summaries %}
+### Dependency notes
+{% for dep_path, dep_summary in ctx.dependency_summaries.items() %}
+- `{{ dep_path }}`: {{ dep_summary }}
+{% endfor %}
+{% endif %}
+
+{% if ctx.parse_errors %}
+### Parser warnings
+{% for err in ctx.parse_errors %}
+- {{ err }}
+{% endfor %}
+{% endif %}
+
+{% if ctx.file_source_snippet %}
+### Source excerpt
+```{{ ctx.language }}
+{{ ctx.file_source_snippet }}
+```
+{% endif %}
+
+{% if ctx.rag_context %}
+### Related indexed context
+{% for rag in ctx.rag_context %}
+{{ rag }}
+{% endfor %}
+{% endif %}
+
+{% if ctx.git_metadata %}
+### History and ownership signals
+{% if ctx.git_metadata.primary_owner_name is defined and ctx.git_metadata.primary_owner_name %}
+- Primary owner: {{ ctx.git_metadata.primary_owner_name }} ({{ (ctx.git_metadata.primary_owner_commit_pct * 100) | round | int }}% of lines)
+{% if ctx.git_metadata.top_authors is defined and ctx.git_metadata.top_authors | length > 1 %}
+- Other contributors: {% for a in ctx.git_metadata.top_authors[1:3] %}{{ a.name }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% endif %}
+{% if ctx.git_metadata.significant_commit_messages is defined and ctx.git_metadata.significant_commit_messages %}
+- Commit history: {{ ctx.git_metadata.commit_count_total }} commits over {{ ctx.git_metadata.age_days }} days.
+{% for commit in ctx.git_metadata.significant_commit_messages %}
+  - {{ commit.date[:10] }}: {{ commit.message }} ({{ commit.author }})
+{% endfor %}
+{% endif %}
+{% if ctx.git_metadata.is_hotspot is defined and ctx.git_metadata.is_hotspot %}
+- Risk signal: hotspot file. Mention that this file is high-churn and high-complexity.
+{% endif %}
+{% if ctx.git_metadata.is_stable is defined and ctx.git_metadata.is_stable %}
+- Stability signal: stable file. Mention that it has not changed recently.
+{% endif %}
+{% if ctx.git_metadata.co_change_partners is defined and ctx.git_metadata.co_change_partners %}
+- Co-change partners:
+{% for partner in ctx.git_metadata.co_change_partners[:3] %}
+  - `{{ partner.file_path }}` changed with this file {{ partner.co_change_count }} times.
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if ctx.call_graph %}
+### Call relationships
+{% for cg in ctx.call_graph %}
+- `{{ cg.caller }}` -> `{{ cg.callee }}`{% if cg.callee_file and cg.callee_file != ctx.file_path %} in `{{ cg.callee_file }}`{% endif %}{% if cg.caller_file is defined and cg.caller_file and cg.caller_file != ctx.file_path %} from `{{ cg.caller_file }}`{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if ctx.heritage %}
+### Type hierarchy
+{% for h in ctx.heritage %}
+- `{{ h.child }}` {{ h.kind }} `{{ h.parent }}`{% if h.parent_file is defined and h.parent_file %} in `{{ h.parent_file }}`{% endif %}{% if h.child_file is defined and h.child_file %} from `{{ h.child_file }}`{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if ctx.community_label %}
+### Architectural cluster
+This file is in the `{{ ctx.community_label }}` community{% if ctx.community_cohesion > 0 %} with cohesion {{ "%.2f"|format(ctx.community_cohesion) }}{% endif %}. Use that to explain its role.
+{% endif %}
+
+{% if ctx.dead_code_findings %}
+### Possible dead code
+{% for finding in ctx.dead_code_findings %}
+- `{{ finding.symbol_name }}`: {{ finding.reason }} (confidence {{ (finding.confidence * 100) | int }}%{% if finding.safe_to_delete %}, marked safe to remove{% endif %})
+{% endfor %}
+{% endif %}
+
+{% if ctx.depth == "thorough" %}
+Depth: thorough — this is a high-activity or high-centrality file. Explain implementation rationale, failure modes, edge cases, and include at least one multi-step usage example.
+{% elif ctx.depth == "minimal" %}
+Depth: minimal — stable, low-centrality file. Cap each section at 3–4 sentences. Focus on the public API and one concrete usage example only.
+{% endif %}
+
+---
+Write the wiki page now.
+
+**Synthesis rules:**
+1. **Lead with the most important signal.** If the file is a hotspot → open with a risk callout box. If betweenness > 0.01 → open by stating it is a bridge between subsystems. If bus factor is 1 → open with a knowledge-risk warning. If the file is stable → open by stating it is proven infrastructure.
+2. **Interpret, do not list.** For each dependency, explain what capability it contributes. For co-change partners, explain the likely reason for implicit coupling. For the commit history, extract the narrative of how this file evolved.
+3. **## Role** must answer: what architectural problem does this file solve, and why does it live at this layer?
+4. **## Public API** must explain each symbol's purpose in context — not just restate the docstring.
+5. **## Key Dependencies** must explain what breaks if each dependency is removed.
+6. **## Stability & Risk** must give a developer concrete guidance: is it safe to modify this file alone, or will changes cascade?
+7. **## Usage Notes** must contain at least one gotcha, non-obvious constraint, or common mistake.
+

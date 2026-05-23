@@ -1,0 +1,62 @@
+Write a Provenant symbol page for `{{ ctx.symbol_name }}`.
+
+Use only the supplied facts. Keep the signature and qualified name unchanged.
+Return Markdown with `## Purpose`, `## Signature`, `## Parameters`,
+`## Returns`, and `## Example Usage` when the facts support those sections.
+
+### Symbol facts
+- Name: `{{ ctx.symbol_name }}`
+- Qualified name: `{{ ctx.qualified_name }}`
+- Kind: {{ ctx.kind }}
+- File: `{{ ctx.file_path }}`
+- Async: {{ ctx.is_async }}
+- Complexity estimate: {{ ctx.complexity_estimate }}
+
+### Signature
+```
+{{ ctx.signature }}
+```
+
+{% if ctx.docstring %}
+### Existing documentation
+{{ ctx.docstring }}
+{% endif %}
+
+{% if ctx.decorators %}
+### Decorators
+{% for dec in ctx.decorators %}
+- `{{ dec }}`
+{% endfor %}
+{% endif %}
+
+{% if ctx.source_body %}
+### Implementation body
+```
+{{ ctx.source_body }}
+```
+{% endif %}
+
+### Containing-module callers
+{% if ctx.callers %}
+{% for caller in ctx.callers %}
+- `{{ caller }}`
+{% endfor %}
+{% else %}
+- No callers were found from import analysis.
+{% endif %}
+
+{% if ctx.complexity_estimate and ctx.complexity_estimate > 5 %}
+Complexity signal: estimated cyclomatic complexity {{ ctx.complexity_estimate }} — flag this in ## Purpose and add a note about what conditions branch the behaviour.
+{% endif %}
+
+---
+Write the symbol page now.
+
+**Synthesis rules:**
+1. **## Purpose** must explain the design decision behind this symbol — not just what it does, but *why it was built this way* vs simpler alternatives.
+2. **## Signature** must explain every parameter: its type, valid range, what happens if it is None or empty, and whether order matters.
+3. **## Returns** must state what is returned under each condition, including error/exception paths.
+4. **## Example Usage** must show the happy path AND one edge case (e.g., empty input, None, error condition).
+5. **## When NOT to Use** — always include this section. What are the misuse patterns? What should a caller use instead in X scenario? What performance traps exist?
+6. If callers list is non-empty, add **## Callers** explaining which modules depend on this symbol and what they use it for — this gives the reader coupling context.
+

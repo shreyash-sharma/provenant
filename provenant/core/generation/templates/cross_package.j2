@@ -1,0 +1,33 @@
+Create a Provenant cross-package dependency page.
+
+Explain the integration between the source and target package, the API surface
+being consumed, and coupling risk.
+
+### Boundary facts
+- Source package: `{{ ctx.source_package }}` (mean PageRank {{ "%.4f"|format(ctx.source_pagerank_mean) }})
+- Target package: `{{ ctx.target_package }}` (mean PageRank {{ "%.4f"|format(ctx.target_pagerank_mean) }})
+- Coupling strength: {{ ctx.coupling_strength }} source files depend on the target
+
+### Boundary-crossing files
+{% for f in ctx.boundary_files %}
+- `{{ f }}`
+{% endfor %}
+
+### Target public API used
+{% if ctx.used_symbols %}
+{% for sym in ctx.used_symbols %}
+- `{{ sym }}`
+{% endfor %}
+{% else %}
+- No specific public symbols were identified.
+{% endif %}
+
+---
+Write the cross-package dependency page now.
+
+**Synthesis rules:**
+1. **## The Contract** — what does `{{ ctx.source_package }}` assume about `{{ ctx.target_package }}`'s API? State the implicit contract: which symbols are load-bearing, and what behaviour does source depend on?
+2. **## Coupling Inventory** — quantify: {{ ctx.coupling_strength }} files cross this boundary, using {{ ctx.used_symbols | length }} distinct symbols. List the most critical symbols (highest use frequency if known). This is the coupling footprint — flag if it is large.
+3. **## Stability Risk** — use the PageRank signals: source mean {{ "%.4f"|format(ctx.source_pagerank_mean) }}, target mean {{ "%.4f"|format(ctx.target_pagerank_mean) }}. If the target changes these symbols, which source files break, and how quickly would the breakage surface (compile-time vs runtime)?
+4. **## Recommended Interface** — how should this boundary be formalized? Options: (a) extract an explicit interface/protocol type both sides import, (b) introduce a facade in `{{ ctx.target_package }}` that is the only thing `{{ ctx.source_package }}` imports, (c) publish a versioned API contract. Pick the most appropriate one and explain why.
+

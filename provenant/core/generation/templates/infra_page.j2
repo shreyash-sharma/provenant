@@ -1,0 +1,32 @@
+Create a Provenant infrastructure page for `{{ ctx.file_path }}`.
+
+Explain what this file controls, how it is executed, and what operators should
+review before changing it. Use only the extracted targets and raw content.
+
+### Infrastructure facts
+- File: `{{ ctx.file_path }}`
+- Language: {{ ctx.language }}
+
+### Targets or stages
+{% if ctx.targets %}
+{% for target in ctx.targets %}
+- {{ target }}
+{% endfor %}
+{% else %}
+- No targets or stages were extracted.
+{% endif %}
+
+### Raw content
+```{{ ctx.language }}
+{{ ctx.raw_content }}
+```
+
+---
+Write the infrastructure page now.
+
+**Synthesis rules:**
+1. **## What This Manages** — one sentence on the resource or process this file controls (build artifact, container image, deployment, CI pipeline, database migration).
+2. **## Key Targets / Stages** — for each target: its purpose, what it produces or modifies, prerequisites (what must run before it), and side effects (what it changes in the environment).
+3. **## Required Configuration** — every environment variable, secret, and file path this file reads. Note which are optional and what defaults apply. Flag anything that differs between dev and prod.
+4. **## Operational Notes** — this section is for the engineer who is debugging a failure at 2am: how to check if this ran successfully, which logs to look at, common failure modes and their fixes, and what to verify before re-running.
+

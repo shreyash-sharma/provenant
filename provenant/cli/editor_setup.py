@@ -1,0 +1,180 @@
+"""AI editor setup orchestration for provenant init.
+
+The indexing command should not know the details of each editor's config files,
+global settings, or managed instruction files.  This module keeps that product
+setup layer behind a small integration interface; concrete editor integrations
+live in ``provenant.cli.editor_integrations``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class EditorSetupOptions:
+    """Options shared across editor setup integrations."""
+
+    disabled_project_files: frozenset[str] = field(default_factory=frozenset)
+    prompt_for_project_files: bool = False
+
+    def with_disabled_project_file(self, project_file_id: str) -> EditorSetupOptions:
+        """Return options with one managed project file disabled."""
+
+        return EditorSetupOptions(
+            disabled_project_files=self.disabled_project_files | {project_file_id},
+            prompt_for_project_files=self.prompt_for_project_files,
+        )
+
+
+class EditorSetupIntegration(Protocol):
+    """Setup hooks implemented by each AI editor integration."""
+
+    def configure_options(
+        self,
+        console_obj: Any,
+        options: EditorSetupOptions,
+    ) -> EditorSetupOptions:
+        """Let the integration prompt or adjust setup options before writing files."""
+        ...
+
+    def write_project_files(
+        self,
+        console_obj: Any,
+        repo_path: Path,
+        options: EditorSetupOptions,
+    ) -> None:
+        """Write project-local config or instruction files for this editor."""
+        ...
+
+    def register_client(self, console_obj: Any, repo_path: Path) -> None:
+        """Register global or user-level client configuration for this editor."""
+        ...
+
+    def refresh_project_files(
+        self,
+        console_obj: Any,
+        repo_path: Path,
+        options: EditorSetupOptions,
+    ) -> None:
+        """Refresh managed project files after repository content changes."""
+        ...
+
+
+def _resolve_integrations(
+    integrations: tuple[EditorSetupIntegration, ...] | None,
+) -> tuple[EditorSetupIntegration, ...]:
+    if integrations is not None:
+        return integrations
+    from provenant.cli.editor_integrations.defaults import get_default_editor_integrations
+
+    return get_default_editor_integrations()
+
+
+_EDITOR_ALIASES: dict[str, str] = {
+    "claude":   "claude_md",
+    "cursor":   "cursor_rules",
+    "windsurf": "windsurf_rules",
+    "copilot":  "copilot_instructions",
+    "cline":    "cline_rules",
+}
+
+
+def resolve_editor_setup_options(
+    console_obj: Any,
+    *,
+    disabled_project_files: Iterable[str] | None = None,
+    prompt_for_project_files: bool = False,
+    integrations: tuple[EditorSetupIntegration, ...] | None = None,
+) -> EditorSetupOptions:
+    """Build setup options with a single consolidated editor-file prompt."""
+    import click
+
+    base_disabled = frozenset(disabled_project_files or ())
+
+    if not prompt_for_project_files:
+        return EditorSetupOptions(
+            disabled_project_files=base_disabled,
+            prompt_for_project_files=False,
+        )
+
+    generate_all = click.confirm(
+        "  Generate editor config files? "
+        "(.claude/CLAUDE.md, .cursorrules, .windsurfrules, .github/copilot-instructions.md, .clinerules)",
+        default=True,
+    )
+
+    if not generate_all:
+        all_ids = frozenset(_EDITOR_ALIASES.values())
+        return EditorSetupOptions(
+            disabled_project_files=base_disabled | all_ids,
+            prompt_for_project_files=False,
+        )
+
+    skip_input = click.prompt(
+        "  Skip any? (comma-separated: claude, cursor, windsurf, copilot, cline) or press Enter for all",
+        default="",
+        show_default=False,
+    ).strip().lower()
+
+    extra_disabled: set[str] = set()
+    if skip_input:
+        for token in skip_input.split(","):
+            alias = token.strip()
+            file_id = _EDITOR_ALIASES.get(alias)
+            if file_id:
+                extra_disabled.add(file_id)
+
+    return EditorSetupOptions(
+        disabled_project_files=base_disabled | frozenset(extra_disabled),
+        prompt_for_project_files=False,
+    )
+
+
+def write_editor_project_files(
+    console_obj: Any,
+    repo_path: Path,
+    *,
+    options: EditorSetupOptions | None = None,
+    disabled_project_files: Iterable[str] | None = None,
+    integrations: tuple[EditorSetupIntegration, ...] | None = None,
+) -> None:
+    """Write common MCP config and project-local editor files."""
+
+    from provenant.cli.mcp_config import save_mcp_config
+
+    save_mcp_config(repo_path)
+    resolved_options = options or EditorSetupOptions(
+        disabled_project_files=frozenset(disabled_project_files or ()),
+    )
+    for integration in _resolve_integrations(integrations):
+        integration.write_project_files(console_obj, repo_path, resolved_options)
+
+
+def register_editor_clients(
+    console_obj: Any,
+    repo_path: Path,
+    *,
+    integrations: tuple[EditorSetupIntegration, ...] | None = None,
+) -> None:
+    """Register editor clients with provenant MCP and hooks where supported."""
+
+    for integration in _resolve_integrations(integrations):
+        integration.register_client(console_obj, repo_path)
+
+
+def refresh_editor_project_files(
+    console_obj: Any,
+    repo_path: Path,
+    *,
+    options: EditorSetupOptions | None = None,
+    integrations: tuple[EditorSetupIntegration, ...] | None = None,
+) -> None:
+    """Refresh editor-managed project files without rewriting common MCP config."""
+
+    resolved_options = options or EditorSetupOptions()
+    for integration in _resolve_integrations(integrations):
+        integration.refresh_project_files(console_obj, repo_path, resolved_options)

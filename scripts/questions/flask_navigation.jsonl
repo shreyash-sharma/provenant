@@ -1,0 +1,30 @@
+{"id": "nav-001", "question": "Which file and class is responsible for pushing and popping Flask's request context onto the stack?", "tags": ["navigation", "context"]}
+{"id": "nav-002", "question": "Where is Flask's blueprint registration implemented — which file contains the register_blueprint method?", "tags": ["navigation", "blueprints"]}
+{"id": "nav-003", "question": "Which file handles Flask's session cookie serialization and deserialization?", "tags": ["navigation", "sessions"]}
+{"id": "nav-004", "question": "Where is the before_request hook wired into Flask's request dispatch — which method and file?", "tags": ["navigation", "hooks"]}
+{"id": "nav-005", "question": "Which file defines Flask's URL routing rule matching — where does add_url_rule live?", "tags": ["navigation", "routing"]}
+{"id": "nav-006", "question": "Where is Flask's app factory pattern implemented — which class and file handles application creation?", "tags": ["navigation", "factory"]}
+{"id": "nav-007", "question": "Which file contains Flask's error handler registration and which method registers them?", "tags": ["navigation", "errors"]}
+{"id": "nav-008", "question": "Where does Flask's g object get reset between requests — which file and which hook clears it?", "tags": ["navigation", "context"]}
+{"id": "nav-009", "question": "Which file implements Flask's test client and where is the session transaction context manager?", "tags": ["navigation", "testing"]}
+{"id": "nav-010", "question": "Where is Flask's JSON response helper jsonify defined and which file contains it?", "tags": ["navigation", "json"]}
+{"id": "nav-011", "question": "Which file defines the LocalProxy used by flask.request and flask.g — where is it imported from?", "tags": ["navigation", "proxy"]}
+{"id": "nav-012", "question": "Where does Flask's template rendering happen — which function in which file calls Jinja2?", "tags": ["navigation", "templating"]}
+{"id": "nav-013", "question": "Which file contains Flask's WSGI application entry point — where does __call__ on the Flask app live?", "tags": ["navigation", "wsgi"]}
+{"id": "nav-014", "question": "Where is Flask's config object defined and which file implements Config.from_object?", "tags": ["navigation", "config"]}
+{"id": "nav-015", "question": "Which file handles Flask's static file serving and where is send_static_file defined?", "tags": ["navigation", "static"]}
+{"id": "nav-016", "question": "Where is Flask's url_for function defined and which file should I read to understand how it resolves URLs?", "tags": ["navigation", "routing"]}
+{"id": "nav-017", "question": "Which file defines Flask's after_request decorator and where are teardown functions registered?", "tags": ["navigation", "hooks"]}
+{"id": "nav-018", "question": "Where is Flask's MethodView class defined — which file and which base class does it inherit from?", "tags": ["navigation", "views"]}
+{"id": "nav-019", "question": "Which file contains Flask's signal definitions — where are request_started and request_finished defined?", "tags": ["navigation", "signals"]}
+{"id": "nav-020", "question": "Where is Flask's cookie-based session interface implemented — which class and file should I read?", "tags": ["navigation", "sessions"]}
+{"id": "nav-021", "question": "Which file handles the converters for Flask URL routing like IntegerConverter and UUIDConverter?", "tags": ["navigation", "routing"]}
+{"id": "nav-022", "question": "Where does Flask store its registered blueprints — which attribute and which file defines it?", "tags": ["navigation", "blueprints"]}
+{"id": "nav-023", "question": "Which file contains Flask's make_response helper and how does it decide what type of response to build?", "tags": ["navigation", "response"]}
+{"id": "nav-024", "question": "Where is Flask's debug mode and reloader configured — which file and which method reads FLASK_DEBUG?", "tags": ["navigation", "debug"]}
+{"id": "nav-025", "question": "Which file defines how Flask handles 404 and 500 errors by default — where are the default error handlers?", "tags": ["navigation", "errors"]}
+{"id": "nav-026", "question": "Where does Flask's request dispatching happen — which method on which class routes an incoming request to a view function?", "tags": ["navigation", "routing"]}
+{"id": "nav-027", "question": "Which file implements Flask's CLI integration — where is the flask run command defined?", "tags": ["navigation", "cli"]}
+{"id": "nav-028", "question": "Where is Flask's application context pushed during a request — which file and which line initializes the app context stack?", "tags": ["navigation", "context"]}
+{"id": "nav-029", "question": "Which file contains Flask's extension interface — where should a Flask extension hook into the app initialization?", "tags": ["navigation", "extensions"]}
+{"id": "nav-030", "question": "Where is Flask's request object instantiated during the WSGI call — which file and which method creates the Request object?", "tags": ["navigation", "wsgi"]}

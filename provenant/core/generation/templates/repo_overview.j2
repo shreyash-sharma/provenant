@@ -1,0 +1,73 @@
+Create a Provenant repository overview for `{{ ctx.repo_name }}`.
+
+Use the facts below to produce a concise onboarding page. Return Markdown with
+`## Project Summary`, `## Technology Stack`, `## Entry Points`, and
+`## Architecture`.
+
+### Repository facts
+- Name: {{ ctx.repo_name }}
+- Monorepo: {{ ctx.is_monorepo }}
+- Files: {{ ctx.total_files }}
+- Estimated LOC: {{ ctx.total_loc }}
+- Circular dependency groups: {{ ctx.circular_dependency_count }}
+
+### Packages
+{% if ctx.packages %}
+{% for pkg in ctx.packages %}
+- `{{ pkg.path }}`: {{ pkg.name }} ({{ pkg.language }})
+{% endfor %}
+{% else %}
+- No package boundaries were detected.
+{% endif %}
+
+### Languages
+{% for lang, pct in ctx.language_distribution.items() %}
+- {{ lang }}: {{ "%.1f"|format(pct * 100) }}%
+{% endfor %}
+
+### Entry points
+{% if ctx.entry_points %}
+{% for ep in ctx.entry_points %}
+- `{{ ep }}`
+{% endfor %}
+{% else %}
+- No entry points were detected.
+{% endif %}
+
+### Central files
+{% for item in ctx.top_files_by_pagerank %}
+- `{{ item.path }}` (PageRank {{ "%.4f"|format(item.score) }})
+{% endfor %}
+
+{% if repo_git_summary is defined and repo_git_summary %}
+### Health signals
+- Hotspots: {{ repo_git_summary.hotspot_count }}
+- Stable core files: {{ repo_git_summary.stable_count }}
+- Most changed recently: {{ repo_git_summary.top_churn_files[:3] | join(", ") }}
+- Oldest file: `{{ repo_git_summary.oldest_file }}` ({{ repo_git_summary.oldest_file_age_days }} days)
+{% endif %}
+
+{% if ctx.communities %}
+### Dependency communities
+{% for c in ctx.communities %}
+- {{ c.label or "Community " ~ c.id }}: {{ c.size }} files, cohesion {{ c.cohesion }}
+{% endfor %}
+{% endif %}
+
+{% if ctx.execution_flows %}
+### Execution flow candidates
+{% for f in ctx.execution_flows %}
+- `{{ f.entry_point }}`: score {{ f.score }}{% if f.trace_length %}, {{ f.trace_length }} steps{% endif %}
+{% endfor %}
+{% endif %}
+
+---
+Write the repository overview now.
+
+**Synthesis rules:**
+1. **## What This Does** — one paragraph, plain English, no jargon. What problem does this codebase solve for its end users? What would break in the world if this software stopped existing?
+2. **## Start Here** — list the 3–5 files a new contributor must read first, in order, with one sentence explaining *why* each one is the right starting point. Prefer entry points, core abstractions, and the highest-PageRank files from the central files list above.
+3. **## System Architecture** — describe the major layers and the data flow between them. Use the communities and packages data to identify the layers. State what crosses layer boundaries.
+4. **## Technology Choices** — for each major technology in the stack, give the non-obvious reason it was chosen over alternatives. If the reason is not inferable from the data, state the choice without guessing the reason.
+5. **## Health Signals** — interpret the numbers as team risk, not statistics: "{{ ctx.circular_dependency_count }} circular dependency groups slow builds and complicate testing." For hotspots, name the specific files. For stable core, quantify the percentage.
+

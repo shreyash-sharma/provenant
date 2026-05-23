@@ -1,0 +1,20 @@
+{"id": "django-001", "question": "How does Django's ORM query evaluation work — when is SQL actually executed?", "tags": ["orm", "queryset", "lazy-evaluation"]}
+{"id": "django-002", "question": "How does Django handle database migrations — what files does makemigrations generate and how does migrate apply them?", "tags": ["migrations", "database"]}
+{"id": "django-003", "question": "How does Django's middleware stack work — in what order are process_request and process_response called?", "tags": ["middleware", "request-lifecycle"]}
+{"id": "django-004", "question": "How does Django's URL routing work — how does urls.py resolve a URL to a view?", "tags": ["routing", "urls"]}
+{"id": "django-005", "question": "How does Django's signal system work — how do you connect a handler to post_save and when does it fire?", "tags": ["signals"]}
+{"id": "django-006", "question": "How does Django's admin site auto-discover and register models — what does admin.site.register do?", "tags": ["admin"]}
+{"id": "django-007", "question": "How does Django's form validation work — what is the full clean() pipeline for a ModelForm?", "tags": ["forms", "validation"]}
+{"id": "django-008", "question": "How does Django's authentication system work — what happens when a user calls login() and how is the session stored?", "tags": ["auth", "sessions"]}
+{"id": "django-009", "question": "How does Django's caching framework work — how do you cache a view with cache_page and what backends are supported?", "tags": ["caching"]}
+{"id": "django-010", "question": "How does Django's template engine work — how are template tags and filters compiled and rendered?", "tags": ["templates"]}
+{"id": "django-011", "question": "How does Django handle database transactions — what does atomic() do and when does it roll back?", "tags": ["transactions", "orm"]}
+{"id": "django-012", "question": "How does Django's select_related work and how is it different from prefetch_related?", "tags": ["orm", "performance"]}
+{"id": "django-013", "question": "How does Django's ContentTypes framework work — what is GenericForeignKey and how is it resolved?", "tags": ["contenttypes", "orm"]}
+{"id": "django-014", "question": "How does Django's staticfiles app collect and serve static files in production?", "tags": ["staticfiles"]}
+{"id": "django-015", "question": "How does Django's permission system work — how are model-level permissions created and checked with has_perm?", "tags": ["auth", "permissions"]}
+{"id": "django-016", "question": "How does the Django test client work — how does Client.get() simulate an HTTP request without a real server?", "tags": ["testing"]}
+{"id": "django-017", "question": "How does Django's F() expression work — how does it defer a field reference to the database?", "tags": ["orm", "expressions"]}
+{"id": "django-018", "question": "How does Django's management command system work — how do you write a custom manage.py command?", "tags": ["management-commands"]}
+{"id": "django-019", "question": "How does Django's WSGI/ASGI interface work — how does a web server hand off a request to the Django application?", "tags": ["wsgi", "asgi", "deployment"]}
+{"id": "django-020", "question": "How does Django's Q object work for complex queryset filtering with OR and NOT conditions?", "tags": ["orm", "queries"]}

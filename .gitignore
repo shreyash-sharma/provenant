@@ -1,0 +1,68 @@
+# ── Secrets ─────────────────────────────────────────────────────────────────
+.env
+.env.*
+**/.env
+**/.env.*
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# ── Stratum runtime ──────────────────────────────────────────────────────────
+.stratum/
+*.jsonl.bak
+
+# ── Scripts results (all generated output, logs, cloned repos) ───────────────
+scripts/results/
+
+# ── One-off / internal testing scripts (not needed publicly) ─────────────────
+scripts/analyze_confidence.py
+scripts/benchmark_naive.py
+scripts/benchmark_prefetch.py
+scripts/benchmark_repowise.py
+scripts/check_xarray.py
+scripts/compare_hyde.py
+scripts/contextbench_eval.py
+scripts/contextbench_run_all.py
+scripts/contextbench_runner.py
+scripts/fix_quotes.py
+scripts/polish_provenant_hackathon_deck.py
+scripts/raw_bm25_baseline.py
+scripts/reindex_and_eval_fireworks.py
+scripts/reindex_and_eval_fireworks_parallel.py
+scripts/reindex_fireworks.sh
+scripts/run_init_overnight.ps1
+scripts/run_parallel_reindex.sh
+scripts/sanity_test.py
+scripts/update_title_slide_tiles_com.py
+scripts/validate_pptx_overflow_com.py
+
+# ── Pytest cache (standard + temp named dirs) ────────────────────────────────
+pytest-cache-files-*/
+
+# ── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+.next/
+.turbo/
+*.tsbuildinfo
+packages/web/out/
+packages/web/*.log
+packages/web/.next-dev*
+packages/web/ui_dev.db
+
+# ── Internal dev notes ───────────────────────────────────────────────────────
+CODEX_PROMPTS.md
+packages/web/next-env.d.ts
+
+# ── Excluded directories ─────────────────────────────────────────────────────
+paper/
+test-repo/
+stratum/
+stratum-code-analysis-v0/
+microsoft hackathon/
+demo/
+docs/

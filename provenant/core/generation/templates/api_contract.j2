@@ -1,0 +1,42 @@
+Create a Provenant API contract page for `{{ ctx.file_path }}`.
+
+Document the contract from the extracted endpoints, schemas, and raw content.
+Do not infer endpoints or fields that are not present.
+
+### Contract facts
+- File: `{{ ctx.file_path }}`
+- Language: {{ ctx.language }}
+
+### Extracted endpoints
+{% if ctx.endpoints %}
+{% for ep in ctx.endpoints %}
+- {{ ep }}
+{% endfor %}
+{% else %}
+- No endpoints were extracted.
+{% endif %}
+
+### Extracted schemas
+{% if ctx.schemas %}
+{% for schema in ctx.schemas %}
+- {{ schema }}
+{% endfor %}
+{% else %}
+- No schemas were extracted.
+{% endif %}
+
+### Raw contract content
+```{{ ctx.language }}
+{{ ctx.raw_content }}
+```
+
+---
+Write the API contract page now.
+
+**Synthesis rules:**
+1. **## Purpose** — one sentence on what integration this enables and which system or team calls this contract.
+2. **## Endpoints / Entry Points** — for each endpoint: method, path or function name, every parameter with type and whether required, return shape. State what is returned on success vs error. Do not invent endpoints not present in the raw content.
+3. **## Authentication & Authorization** — what credentials does the caller need, how are they passed (header, query param, env var), and what happens when they are missing or invalid?
+4. **## Error Handling** — every error code, exception, or failure mode the caller must handle, with guidance on how to recover from each.
+5. **## Breaking Change Risk** — identify which fields or behaviours are stable (safe to depend on) vs experimental (may change). Flag any field named `*_beta`, `*_v2`, `*_legacy`, or similar as potentially unstable.
+
