@@ -1,4 +1,6 @@
-# Provenant
+<p align="center">
+  <img src="provenant.png" alt="Provenant" width="480"/>
+</p>
 
 **Attribution-guided wiki indexing for AI coding agents.**
 
@@ -144,7 +146,7 @@ PROVENANT_DOC_MODEL=deepseek/deepseek-chat
 **Provenant: Attribution-Guided Wiki Indexing for Repository-Level AI Coding Agents**
 Shreyash Sharma — Maulana Azad National Institute of Technology Bhopal
 
-[`paper/stratum_paper/main.pdf`](paper/stratum_paper/main.pdf)
+[Read the whitepaper →](https://www.shreyashsharma.com/writing/provenant)
 
 ---
 
