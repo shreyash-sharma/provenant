@@ -4,12 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenant"
-version = "0.1.0"
+version = "0.1.1"
 description = "Proof-aware codebase intelligence - smarter context, fewer tokens"
 requires-python = ">=3.11"
 license = "MIT"
+readme = "README.md"
 keywords = ["codebase", "ai", "mcp", "context", "compression", "llm"]
-
+authors = [
+    { name = "Shreyash Sharma", email = "shreyash.sharma78@gmail.com" }
+]
 dependencies = [
     "httpx>=0.27,<1",
     "tree-sitter>=0.23,<1",
@@ -50,6 +53,11 @@ dependencies = [
     "litellm>=1.83.0,<2",
     "python-dotenv>=1.0,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/shreyash-sharma/provenant"
+Repository = "https://github.com/shreyash-sharma/provenant"
+"Bug Tracker" = "https://github.com/shreyash-sharma/provenant/issues"
 
 [project.optional-dependencies]
 dev = [

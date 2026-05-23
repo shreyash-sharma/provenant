@@ -280,7 +280,7 @@ def _save_global_embedder(embedder: str, api_key: str) -> None:
         pass  # Non-fatal - user just gets prompted again next time.
 
 
-_GITHUB_REPO = "provenant-dev/provenant"
+_GITHUB_REPO = "shreyash-sharma/provenant"
 _WEB_CACHE_DIR = Path.home() / ".provenant" / "web"
 _MARKER_FILE = _WEB_CACHE_DIR / ".version"
 _MAX_PORT_PROBES = 100
