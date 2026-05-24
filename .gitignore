@@ -40,6 +40,18 @@ scripts/run_parallel_reindex.sh
 scripts/sanity_test.py
 scripts/update_title_slide_tiles_com.py
 scripts/validate_pptx_overflow_com.py
+scripts/add_ppt_logo_and_links_com.py
+scripts/audit_ppt_links_com.py
+scripts/compact_methodology_axes.py
+scripts/compact_methodology_axes_com.py
+scripts/darken_ppt_slides_com.py
+scripts/fix_solution_text_overflow.py
+scripts/fix_solution_text_overflow_com.py
+scripts/fix_validation_slide_layout.py
+scripts/recolor_ppt_blue_titles_to_orange.py
+scripts/recolor_ppt_blue_titles_to_orange_com.py
+scripts/split_solution_slide.py
+provenant-web.tar.gz
 
 # ── Pytest cache (standard + temp named dirs) ────────────────────────────────
 pytest-cache-files-*/

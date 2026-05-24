@@ -30,38 +30,31 @@ OK = "green"
 WARN = "yellow"
 ERR = "bold red"
 
-# ---------------------------------------------------------------------------
-# ASCII-safe wordmark. Avoids box-drawing/block glyphs because Windows
-# terminals often run under legacy code pages during first install.
-# ---------------------------------------------------------------------------
-
-_LOGO = (
-    "   ____  _____ ____      _  _____ _   _ __  __ \n"
-    "  / ___||_   _||  _ \   / \|_   _|| | | ||  \/  |\n"
-    "  \___ \ | |  | |_) | / _ \ | |  | |_| || |\/| |\n"
-    "   ___) || |  |  _ < / ___ \| |  |  _  || |  | |\n"
-    "  |____/ |_|  |_| \_/_/   \_\_|  |_| |_||_|  |_|"
-)
-
-def _get_logo() -> str:
-    return _LOGO
-
-
 def print_banner(console: Console, repo_name: str | None = None) -> None:
-    """Print the provenant logo, tagline, and optional repo name."""
-    import sys
-    import io
+    """Print the provenant banner using Rich styling — no ASCII art."""
     from provenant.cli import __version__
 
-    # Force UTF-8 on Windows so box/block chars render correctly
-    if hasattr(sys.stdout, "buffer") and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    import time
 
     console.print()
-    console.out(_get_logo(), style=BRAND_STYLE, highlight=False)
-    console.print(
-        f"  [dim]codebase intelligence for developers and AI[/dim]  [dim]v{__version__}[/dim]"
-    )
+    if console.is_terminal:
+        word = "  P R O V E N A N T"
+        for i in range(1, len(word) + 1):
+            t = Text()
+            t.append(word[:i], style=f"bold {BRAND}")
+            console.print(t, end="\r")
+            time.sleep(0.04)
+        time.sleep(0.4)
+        console.print()
+    else:
+        t = Text()
+        t.append("  P R O V E N A N T", style=f"bold {BRAND}")
+        console.print(t)
+
+    tagline = Text()
+    tagline.append("  codebase intelligence for developers and AI", style="dim")
+    tagline.append(f"  v{__version__}", style="dim")
+    console.print(tagline)
     if repo_name:
         console.print()
         console.print(f"  Repository: [bold]{repo_name}[/bold]")
