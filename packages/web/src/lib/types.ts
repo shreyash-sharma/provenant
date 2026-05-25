@@ -307,6 +307,7 @@ export interface PageListResponse {
     path: string;
     page_type: string;
     freshness: string;
+    freshness_status: string | null;
     confidence: number | null;
     updated_at: string | null;
   }>;
@@ -324,7 +325,9 @@ export interface PageDetailResponse {
   content: string;
   summary: string | null;
   freshness: string;
+  freshness_status: string | null;
   confidence: number | null;
+  version: number | null;
   input_tokens: number;
   output_tokens: number;
   updated_at: string | null;
@@ -351,6 +354,59 @@ export interface RepairCandidatesResponse {
     weak_threshold: number;
     min_retrievals: number;
     limit: number;
+  };
+}
+
+export interface BlastRadiusResponse {
+  seed_files: string[];
+  affected: { file: string; depth: number }[];
+  stats: { total_affected: number; max_depth_reached: number };
+}
+
+export interface DecisionRecord {
+  id: string;
+  title: string;
+  status: string;
+  context: string;
+  decision: string;
+  rationale: string;
+  alternatives: string[];
+  consequences: string[];
+  affected_files: string[];
+  tags: string[];
+  source: string;
+  confidence: number | null;
+  staleness_score: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface DecisionsResponse {
+  decisions: DecisionRecord[];
+  total: number;
+}
+
+export interface RiskHeatmapFile {
+  file: string;
+  is_hotspot: boolean;
+  churn_percentile: number;
+  temporal_hotspot_score: number;
+  primary_owner: string | null;
+  owner_pct: number | null;
+  bus_factor: number;
+  contributor_count: number;
+  commit_count_90d: number;
+  pagerank: number;
+  community_id: number | null;
+}
+
+export interface RiskHeatmapResponse {
+  files: RiskHeatmapFile[];
+  stats: {
+    total_files: number;
+    hotspot_count: number;
+    avg_bus_factor: number;
+    solo_owned_count: number;
   };
 }
 

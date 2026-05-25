@@ -10,12 +10,15 @@ import type { ProjectResponse } from "@/lib/types";
 
 const primaryNav = [
   { href: "/model", label: "Model" },
+  { href: "/wiki", label: "Wiki" },
   { href: "/knowledge", label: "Map" },
   { href: "/repair", label: "Repair" },
 ] as const;
 
 const secondaryNav = [
   { href: "/risk", label: "Risk" },
+  { href: "/blast-radius", label: "Blast Radius" },
+  { href: "/decisions", label: "Decisions" },
   { href: "/dead-code", label: "Dead Code" },
   { href: "/operations", label: "Ops" },
   { href: "/agent-interface", label: "API" },

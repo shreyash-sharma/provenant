@@ -1501,8 +1501,26 @@ def init_command(
             language=language,
             reasoning=resolved_reasoning,
         )
+
+        # ── Intelligent tier selection (interactive only) ─────────────────
+        generation_files = result.parsed_files
+        if is_interactive:
+            from provenant.cli.ui import CoverageTier, compute_coverage_tiers, interactive_tier_select
+            try:
+                tiers = compute_coverage_tiers(
+                    result, gen_config, skip_tests, skip_infra,
+                    provider.provider_name, provider.model_name,
+                )
+                selected_paths = interactive_tier_select(console, tiers)
+                generation_files = [
+                    pf for pf in result.parsed_files
+                    if pf.file_info.path in selected_paths
+                ]
+            except Exception as _tier_err:
+                console.print(f"  [dim]Tier selection unavailable ({_tier_err}), using full file list.[/dim]")
+
         plans = build_generation_plan(
-            result.parsed_files, result.graph_builder, gen_config, skip_tests, skip_infra
+            generation_files, result.graph_builder, gen_config, skip_tests, skip_infra
         )
         est = estimate_cost(plans, provider.provider_name, provider.model_name)
 

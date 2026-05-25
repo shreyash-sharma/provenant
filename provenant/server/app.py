@@ -108,6 +108,11 @@ class RepairRunRequest(BaseModel):
     selected_pages: list[str] | None = None  # if set, repair only these specific pages
 
 
+class BlastRadiusRequest(BaseModel):
+    files: list[str]
+    max_depth: int = Field(3, ge=1, le=6)
+
+
 def _as_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
@@ -594,7 +599,7 @@ def create_app() -> FastAPI:
                 versions = await session.execute(
                     select(
                         PageVersion.version,
-                        PageVersion.created_at,
+                        PageVersion.archived_at,
                         PageVersion.model_name,
                     )
                     .where(PageVersion.page_id == page_id)
@@ -626,7 +631,7 @@ def create_app() -> FastAPI:
                 "version_history": [
                     {
                         "version": v.version,
-                        "created_at": v.created_at.isoformat() if v.created_at else None,
+                        "created_at": v.archived_at.isoformat() if v.archived_at else None,
                         "model_name": v.model_name,
                     }
                     for v in version_rows
@@ -787,6 +792,211 @@ def create_app() -> FastAPI:
                 "message": f"Repaired {len(target_pages)} pages. Run retrieval trials to measure improvement.",
             }
         except Exception as exc:  # noqa: BLE001 - REST boundary
+            raise _as_http_error(exc) from exc
+
+    # ── Blast Radius ─────────────────────────────────────────────────────────
+
+    @app.post("/api/blast-radius")
+    async def blast_radius(body: BlastRadiusRequest) -> dict[str, Any]:
+        from collections import deque
+
+        from sqlalchemy import select
+
+        from provenant.core.persistence.database import get_session
+        from provenant.core.persistence.models import GraphEdge
+        from provenant.server.mcp_server import _state
+        from provenant.server.mcp_server._helpers import _get_repo
+
+        try:
+            async with get_session(_state._session_factory) as session:
+                repo = await _get_repo(session)
+                edge_rows = await session.execute(
+                    select(GraphEdge.source_node_id, GraphEdge.target_node_id)
+                    .where(GraphEdge.repository_id == repo.id)
+                )
+                edges = edge_rows.all()
+
+            # Build reverse adjacency: target -> [sources that import it]
+            reverse_graph: dict[str, list[str]] = {}
+            for source, target in edges:
+                reverse_graph.setdefault(target, [])
+                reverse_graph[target].append(source)
+
+            seed_set = set(body.files)
+            # BFS
+            affected: dict[str, int] = {}  # file -> min depth
+            queue: deque[tuple[str, int]] = deque()
+            visited: set[str] = set(body.files)
+
+            for seed in body.files:
+                for neighbor in reverse_graph.get(seed, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append((neighbor, 1))
+                        affected[neighbor] = 1
+
+            max_depth_reached = 0
+            while queue:
+                node, depth = queue.popleft()
+                if depth > max_depth_reached:
+                    max_depth_reached = depth
+                if depth >= body.max_depth:
+                    continue
+                for neighbor in reverse_graph.get(node, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        new_depth = depth + 1
+                        queue.append((neighbor, new_depth))
+                        affected[neighbor] = new_depth
+                    elif neighbor in affected and affected[neighbor] > depth + 1:
+                        affected[neighbor] = depth + 1
+
+            affected_list = sorted(
+                [{"file": f, "depth": d} for f, d in affected.items() if f not in seed_set],
+                key=lambda x: (x["depth"], x["file"]),
+            )
+
+            return {
+                "seed_files": list(body.files),
+                "affected": affected_list,
+                "stats": {
+                    "total_affected": len(affected_list),
+                    "max_depth_reached": max_depth_reached,
+                },
+            }
+        except Exception as exc:  # noqa: BLE001
+            raise _as_http_error(exc) from exc
+
+    # ── Decisions ────────────────────────────────────────────────────────────
+
+    @app.get("/api/decisions")
+    async def decisions_list(
+        status: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from provenant.core.persistence.database import get_session
+        from provenant.core.persistence.models import DecisionRecord
+        from provenant.server.mcp_server import _state
+        from provenant.server.mcp_server._helpers import _get_repo
+
+        try:
+            async with get_session(_state._session_factory) as session:
+                repo = await _get_repo(session)
+                q = select(DecisionRecord).where(DecisionRecord.repository_id == repo.id)
+                if status:
+                    q = q.where(DecisionRecord.status == status)
+                q = q.order_by(DecisionRecord.created_at.desc()).limit(limit)
+                rows = await session.execute(q)
+                records = list(rows.scalars().all())
+
+            def _parse(val: str | None) -> list:
+                if not val:
+                    return []
+                try:
+                    return json.loads(val)
+                except Exception:
+                    return []
+
+            decisions = [
+                {
+                    "id": str(r.id),
+                    "title": r.title,
+                    "status": r.status,
+                    "context": r.context or "",
+                    "decision": r.decision or "",
+                    "rationale": r.rationale or "",
+                    "alternatives": _parse(r.alternatives_json),
+                    "consequences": _parse(r.consequences_json),
+                    "affected_files": _parse(r.affected_files_json),
+                    "tags": _parse(r.tags_json),
+                    "source": r.source or "",
+                    "confidence": r.confidence,
+                    "staleness_score": r.staleness_score,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                }
+                for r in records
+            ]
+            return {"decisions": decisions, "total": len(decisions)}
+        except Exception as exc:  # noqa: BLE001
+            raise _as_http_error(exc) from exc
+
+    # ── Risk Heatmap ─────────────────────────────────────────────────────────
+
+    @app.get("/api/risk/heatmap")
+    async def risk_heatmap() -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from provenant.core.persistence.database import get_session
+        from provenant.core.persistence.models import GitMetadata, GraphNode
+        from provenant.server.mcp_server import _state
+        from provenant.server.mcp_server._helpers import _get_repo
+
+        try:
+            async with get_session(_state._session_factory) as session:
+                repo = await _get_repo(session)
+
+                from sqlalchemy import nulls_last
+
+                git_rows = await session.execute(
+                    select(GitMetadata)
+                    .where(GitMetadata.repository_id == repo.id)
+                    .order_by(nulls_last(GitMetadata.temporal_hotspot_score.desc()))
+                    .limit(500)
+                )
+                git_records = list(git_rows.scalars().all())
+
+                node_rows = await session.execute(
+                    select(GraphNode.file_path, GraphNode.pagerank, GraphNode.community_id)
+                    .where(GraphNode.repository_id == repo.id, GraphNode.node_type == "file")
+                )
+                node_map: dict[str, tuple[float, int | None]] = {
+                    row[0]: (row[1] or 0.0, row[2]) for row in node_rows.all() if row[0]
+                }
+
+            files = []
+            hotspot_count = 0
+            solo_owned_count = 0
+            bus_factor_sum = 0.0
+
+            for g in git_records:
+                pagerank, community_id = node_map.get(g.file_path, (0.0, None))
+                bf = g.bus_factor or 1
+                is_hotspot = bool(g.is_hotspot)
+                if is_hotspot:
+                    hotspot_count += 1
+                if bf <= 1:
+                    solo_owned_count += 1
+                bus_factor_sum += bf
+                files.append({
+                    "file": g.file_path,
+                    "is_hotspot": is_hotspot,
+                    "churn_percentile": g.churn_percentile or 0.0,
+                    "temporal_hotspot_score": g.temporal_hotspot_score or 0.0,
+                    "primary_owner": g.primary_owner_name,
+                    "owner_pct": g.primary_owner_commit_pct,
+                    "bus_factor": bf,
+                    "contributor_count": g.contributor_count or 0,
+                    "commit_count_90d": g.commit_count_90d or 0,
+                    "pagerank": pagerank,
+                    "community_id": community_id,
+                })
+
+            total = len(files)
+            avg_bf = round(bus_factor_sum / total, 2) if total else 0.0
+
+            return {
+                "files": files,
+                "stats": {
+                    "total_files": total,
+                    "hotspot_count": hotspot_count,
+                    "avg_bus_factor": avg_bf,
+                    "solo_owned_count": solo_owned_count,
+                },
+            }
+        except Exception as exc:  # noqa: BLE001
             raise _as_http_error(exc) from exc
 
     # ── Static web UI (Node-free) ────────────────────────────────────────────

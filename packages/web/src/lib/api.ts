@@ -1,8 +1,10 @@
 import axios from "axios";
 import type {
   AnswerResponse,
+  BlastRadiusResponse,
   ContextResponse,
   DeadCodeResponse,
+  DecisionsResponse,
   GraphResponse,
   ModelResponse,
   OverviewResponse,
@@ -12,6 +14,7 @@ import type {
   RepairCandidatesResponse,
   RepairRunRequest,
   RepairRunResponse,
+  RiskHeatmapResponse,
   RiskResponse,
   RiskOverviewResponse,
   SearchResponse,
@@ -127,4 +130,13 @@ export const api = {
 
   repairRun: (body: RepairRunRequest): Promise<RepairRunResponse> =>
     client.post('/api/repair/run', body).then(r => r.data),
+
+  blastRadius: (files: string[], max_depth: number = 3): Promise<BlastRadiusResponse> =>
+    client.post('/api/blast-radius', { files, max_depth }).then(r => r.data),
+
+  decisions: (status?: string): Promise<DecisionsResponse> =>
+    client.get('/api/decisions', { params: status ? { status } : {} }).then(r => r.data),
+
+  riskHeatmap: (): Promise<RiskHeatmapResponse> =>
+    client.get('/api/risk/heatmap').then(r => r.data),
 };

@@ -36,24 +36,32 @@ def print_banner(console: Console, repo_name: str | None = None) -> None:
 
     import time
 
+    word = "P R O V E N A N T"
+    width = console.width or 80
+    pad = " " * ((width - len(word)) // 2)
+
+    tagline = Text(justify="center")
+    tagline.append("codebase intelligence for developers and AI", style="dim")
+    tagline.append(f"  v{__version__}", style="dim")
+
     console.print()
+    console.print(Rule(style=BRAND))
+
     if console.is_terminal:
-        word = "  P R O V E N A N T"
         for i in range(1, len(word) + 1):
             t = Text()
-            t.append(word[:i], style=f"bold {BRAND}")
+            t.append(pad + word[:i], style=f"bold {BRAND}")
             console.print(t, end="\r")
             time.sleep(0.04)
         time.sleep(0.4)
         console.print()
     else:
         t = Text()
-        t.append("  P R O V E N A N T", style=f"bold {BRAND}")
+        t.append(pad + word, style=f"bold {BRAND}")
         console.print(t)
 
-    tagline = Text()
-    tagline.append("  codebase intelligence for developers and AI", style="dim")
-    tagline.append(f"  v{__version__}", style="dim")
+    console.print(Rule(style=BRAND))
+    console.print()
     console.print(tagline)
     if repo_name:
         console.print()
@@ -445,6 +453,151 @@ def _ensure_gitignored(repo_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Intelligent coverage tier selection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CoverageTier:
+    label: str
+    strategy: str
+    file_paths: set[str]
+    page_count: int
+    cost_low: float
+    cost_high: float
+    recommended: bool
+    top_files: list[str]   # top basenames by PageRank for preview
+
+
+def compute_coverage_tiers(
+    result: Any,
+    gen_config: Any,
+    skip_tests: bool,
+    skip_infra: bool,
+    provider_name: str,
+    model_name: str,
+) -> list[CoverageTier]:
+    """Build 4 graph-signal-ranked coverage tiers with cost estimates."""
+    from provenant.cli.cost_estimator import build_generation_plan, estimate_cost
+
+    # ── Graph signals ────────────────────────────────────────────────────────
+    try:
+        pr = result.graph_builder.pagerank()
+        bt = result.graph_builder.betweenness_centrality()
+    except Exception:
+        pr: dict[str, float] = {}
+        bt: dict[str, float] = {}
+
+    def signal(path: str) -> float:
+        return pr.get(path, 0.0) + bt.get(path, 0.0) * 0.3
+
+    # ── Dead code (high-confidence unreachable files) ─────────────────────
+    dead_paths: set[str] = set()
+    if result.dead_code_report:
+        for f in result.dead_code_report.findings:
+            if getattr(f, "kind", "") == "unreachable_file" and getattr(f, "confidence", 0) >= 0.7:
+                dead_paths.add(f.file_path)
+
+    # ── Git hotspots ──────────────────────────────────────────────────────
+    hotspot_paths: set[str] = set()
+    for path, meta in (result.git_meta_map or {}).items():
+        if meta.get("is_hotspot") or meta.get("churn_percentile", 0) > 0.75:
+            hotspot_paths.add(path)
+
+    # ── Viable file universe ──────────────────────────────────────────────
+    all_paths = {pf.file_info.path for pf in result.parsed_files}
+    alive = all_paths - dead_paths
+    ranked = sorted(alive, key=signal, reverse=True)
+    n = len(ranked)
+
+    core_paths   = set(ranked[: max(5, int(n * 0.15))])
+    active_paths = core_paths | (hotspot_paths & alive)
+    smart_paths  = set(ranked[: max(10, int(n * 0.40))])
+    full_paths   = alive
+
+    def _build(label: str, strategy: str, paths: set[str], rec: bool) -> CoverageTier:
+        filtered = [pf for pf in result.parsed_files if pf.file_info.path in paths]
+        try:
+            plans = build_generation_plan(
+                filtered, result.graph_builder, gen_config, skip_tests, skip_infra
+            )
+            est = estimate_cost(plans, provider_name, model_name)
+            pages = est.total_pages
+            mid   = est.estimated_cost_usd
+        except Exception:
+            pages = len(paths)
+            mid   = len(paths) * 0.007
+        top = [Path(p).name for p in sorted(paths, key=signal, reverse=True)[:4]]
+        return CoverageTier(
+            label=label, strategy=strategy, file_paths=paths,
+            page_count=pages, cost_low=mid * 0.8, cost_high=mid * 1.2,
+            recommended=rec, top_files=top,
+        )
+
+    return [
+        _build("Core",
+               "Top PageRank + betweenness — files everything depends on",
+               core_paths, False),
+        _build("Active",
+               "Core + high-churn files (git signal)",
+               active_paths, False),
+        _build("Smart",
+               "Graph-ranked top 40%%, dead code excluded",
+               smart_paths, True),
+        _build("Full",
+               "Everything except provably dead code",
+               full_paths, False),
+    ]
+
+
+def interactive_tier_select(console: Console, tiers: list[CoverageTier]) -> set[str]:
+    """Show intelligent tier table, return selected file paths."""
+    table = Table(box=None, padding=(0, 2), show_header=True)
+    table.add_column("#",          style=BRAND_STYLE, width=4)
+    table.add_column("Tier",       style="bold",      min_width=10)
+    table.add_column("Strategy",                      min_width=46)
+    table.add_column("Pages",      justify="right",   min_width=6)
+    table.add_column("Est. cost",  justify="right",   min_width=14)
+
+    for idx, tier in enumerate(tiers, 1):
+        label = tier.label
+        if tier.recommended:
+            label += " [dim](rec)[/dim]"
+        if tier.cost_high == 0.0:
+            cost_str = "[dim]free[/dim]"
+        else:
+            cost_str = f"${tier.cost_low:.2f}–${tier.cost_high:.2f}"
+        table.add_row(f"[{idx}]", label, tier.strategy, str(tier.page_count), cost_str)
+
+    rec = next((t for t in tiers if t.recommended), tiers[-1])
+
+    console.print()
+    console.print(Rule("[bold]Intelligence-ranked coverage[/bold]", style=BRAND))
+    console.print()
+    console.print(table)
+    if rec.top_files:
+        console.print()
+        console.print(
+            f"  [dim]Smart tier anchors (by PageRank): "
+            f"{', '.join(rec.top_files)}[/dim]"
+        )
+    console.print()
+
+    default_idx = str(next((i for i, t in enumerate(tiers, 1) if t.recommended), 3))
+    choice = Prompt.ask(
+        "  Select coverage",
+        choices=[str(i) for i in range(1, len(tiers) + 1)],
+        default=default_idx,
+        console=console,
+    )
+    selected = tiers[int(choice) - 1]
+    console.print(
+        f"\n  [dim]{selected.label}: {len(selected.file_paths)} files · "
+        f"est. ${selected.cost_low:.2f}–${selected.cost_high:.2f}[/dim]"
+    )
+    return selected.file_paths
+
+
+# ---------------------------------------------------------------------------
 # Interactive mode selection
 # ---------------------------------------------------------------------------
 
@@ -456,26 +609,26 @@ def interactive_mode_select(console: Console) -> str:
     """
     body = Text()
     body.append("  [1]", style=BRAND_STYLE)
-    body.append("  Full documentation  ", style="bold")
+    body.append("  Full intelligence  ", style="bold")
     body.append("(recommended)\n", style="dim")
-    body.append("       Generate wiki pages, architecture diagrams, and API\n")
-    body.append("       docs using an AI provider.\n\n")
+    body.append("       Wiki pages + self-healing index · 60-65x fewer tokens in context.\n")
+    body.append("       Best for MCP-powered AI coding assistants.\n\n")
 
     body.append("  [2]", style=BRAND_STYLE)
-    body.append("  Index only  ", style="bold")
+    body.append("  Graph only  ", style="bold")
     body.append("(no LLM, no cost)\n", style="dim")
     body.append("       Dependency graph, git history, dead code analysis.\n")
-    body.append("       Perfect for MCP-powered AI coding assistants.\n\n")
+    body.append("       Instant structural intelligence, zero API calls.\n\n")
 
     body.append("  [3]", style=BRAND_STYLE)
-    body.append("  Advanced\n", style="bold")
-    body.append("       Full documentation with extra configuration\n")
-    body.append("       (commit limit, exclude patterns, concurrency)")
+    body.append("  Custom\n", style="bold")
+    body.append("       Full intelligence with advanced configuration\n")
+    body.append("       (commit limit, exclude patterns, concurrency ...)")
 
     console.print(
         Panel(
             body,
-            title="[bold]How would you like to document this repo[/bold]",
+            title="[bold]How should Provenant index this repo?[/bold]",
             border_style=BRAND,
             padding=(1, 2),
         )
@@ -707,30 +860,39 @@ def interactive_provider_select(
     providers = list(_PROVIDER_ENV.keys())  # gemini first
     detected = _detect_provider_status()
 
-    # --- provider table ---
-    table = Table(
-        show_header=True,
-        box=None,
-        padding=(0, 2),
-        title="[bold]Provider Setup[/bold]",
-        title_style="",
-    )
-    table.add_column("#", style=BRAND_STYLE, width=4)
-    table.add_column("Provider", style="bold", min_width=12)
-    table.add_column("Status", min_width=16)
-    table.add_column("Default Model", style="dim")
-
+    # --- provider panel ---
+    body = Text()
     for idx, prov in enumerate(providers, 1):
-        status_text = f"[{OK}]OK key set[/]" if prov in detected else "[dim]no key[/dim]"
-        default_model = _PROVIDER_DEFAULTS.get(prov, "")
-        # Mark gemini as recommended
-        label = prov
-        if prov == "gemini":
-            label = f"{prov} [dim](recommended)[/dim]"
-        table.add_row(f"[{idx}]", label, status_text, default_model)
+        model = _PROVIDER_DEFAULTS.get(prov, "")
+        is_ready = prov in detected
+
+        body.append(f"  [{idx}]", style=BRAND_STYLE)
+
+        if is_ready:
+            body.append(f"  {prov:<12}", style=f"bold {BRAND}")
+            body.append(f"  {model:<36}", style="dim")
+            body.append("  ready", style=f"bold {OK}")
+        else:
+            body.append(f"  {prov:<12}", style="bold")
+            body.append(f"  {model}", style="dim")
+            if prov == "gemini":
+                body.append("  recommended", style="dim")
+            elif prov == "ollama":
+                body.append("  local, no key needed", style="dim")
+
+        body.append("\n")
+
+    body.append("\n  [dim]No key? Set ")
+    body.append("ANTHROPIC_API_KEY", style="dim bold")
+    body.append(", ", style="dim")
+    body.append("OPENAI_API_KEY", style="dim bold")
+    body.append(", etc. in your environment or .env[/dim]", style="dim")
 
     console.print()
-    console.print(table)
+    console.print(Rule("[bold]Choose an AI provider[/bold]", style=BRAND))
+    console.print()
+    console.print(body)
+    console.print(f"  [dim]No key? Set ANTHROPIC_API_KEY, OPENAI_API_KEY, etc. in your environment or .env[/dim]")
     console.print()
 
     # --- selection ---
