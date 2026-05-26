@@ -7,7 +7,11 @@
 </p>
 
 <p align="center">
-  Wiki indexing &nbsp;·&nbsp; BM25 + HyDE retrieval &nbsp;·&nbsp; Self-healing index &nbsp;·&nbsp; Dead code &nbsp;·&nbsp; Risk &nbsp;·&nbsp; Git archaeology
+  Evaluated on SWE-bench Verified: <strong>63.8% File Coverage@5</strong> and <strong>60-65x lower context size</strong> versus naive file loading.
+</p>
+
+<p align="center">
+  Wiki indexing &nbsp;|&nbsp; BM25 + HyDE retrieval &nbsp;|&nbsp; Self-healing index &nbsp;|&nbsp; Dead code &nbsp;|&nbsp; Risk &nbsp;|&nbsp; Git archaeology
 </p>
 
 <p align="center">
@@ -19,40 +23,53 @@
 </p>
 
 <p align="center">
-  <a href="https://www.shreyashsharma.com/writing/provenant"><strong>Read the whitepaper →</strong></a>
+  <a href="EVALUATION.md"><strong>Evaluation</strong></a>
+  &nbsp;|&nbsp;
+  <a href="benchmarks/README.md"><strong>Benchmark artifacts</strong></a>
+  &nbsp;|&nbsp;
+  <a href="https://www.shreyashsharma.com/writing/provenant"><strong>Whitepaper</strong></a>
 </p>
 
 ---
 
-## 🏆 Performance
+## Evaluation Summary
 
-Evaluated on **SWE-bench Verified** — 500 real GitHub issues across 12 Python repositories.
+Provenant was evaluated on **SWE-bench Verified**: 500 real GitHub issues across 12 Python repositories.
 
-| Metric | Baseline | + Provenant | Δ |
-|--------|----------|-------------|---|
-| File Coverage@5 | ~40% | **63.8%** | **+24 pp** |
-| File Coverage@10 with HyDE | — | **75.2%** | — |
-| Tokens vs naive file reading | baseline | — | **−60–65×** |
-| Answer quality (LLM judge) | baseline | parity | **−0.15** (noise) |
-| Low-confidence queries healed | — | **75%** | after one repair cycle |
-| Cost per repair cycle | — | **~$0.02** | — |
+Full methodology, benchmark setup, and result discussion are available in the whitepaper:
+https://www.shreyashsharma.com/writing/provenant
+
+A longer research manuscript is currently under submission.
+
+| Metric | Baseline | Provenant | Delta |
+|--------|----------|-----------|------:|
+| File Coverage@5 | 56.2% raw BM25 | **63.8%** wiki BM25 | **+7.6 pp** |
+| File Coverage@5, full config | 56.2% raw BM25 | **66.2%** reranker + selective HyDE | **+10.0 pp** |
+| File Coverage@10, full config | 69.0% raw BM25 | **75.2%** | **+6.2 pp** |
+| MRR, full config | 0.404 raw BM25 | **0.454** | **+0.050** |
+| Tokens vs naive file reading | baseline | **60-65x lower** | measured on Flask/Django QA |
+| Answer quality (LLM judge) | baseline | parity | **-0.15/5** average delta |
+| Low-confidence query repair | 4 low-confidence queries | **2 improved** | avg judge **4.50 -> 4.75** |
+| Cost per repair cycle | - | **~$0.02** | 10 pages repaired / 1,393 |
+
+See [EVALUATION.md](EVALUATION.md) and [benchmarks/](benchmarks/) for the compressed proof trail.
 
 ---
 
-## 🔧 MCP Tools
+## MCP Tools
 
 Eight tools, usable from Claude Code, Cursor, Windsurf, Cline, and Copilot:
 
 | Tool | What it does |
 |------|-------------|
-| `provenant_ask` | Hybrid BM25 + HyDE retrieval → cited answer with confidence score |
-| `provenant_context` | Triage cards for files, modules, symbols — purpose, API, freshness |
+| `provenant_ask` | Hybrid BM25 + HyDE retrieval -> cited answer with confidence score |
+| `provenant_context` | Triage cards for files, modules, symbols: purpose, API, freshness |
 | `provenant_search` | Semantic search over wiki content |
 | `provenant_overview` | Architecture summary, entry points, dependency structure |
-| `provenant_symbol` | Source bytes for a specific function or class |
+| `provenant_symbol` | Byte-precise source retrieval for a specific function or class |
 | `provenant_dead_code` | Unreachable code with confidence tiers and safe-to-delete flags |
 | `provenant_risk` | Hotspot scores, change frequency, test coverage gaps, blast radius |
-| `provenant_why` | Architectural decisions and git archaeology — why does this code exist? |
+| `provenant_why` | Architectural decisions and git archaeology: why does this code exist? |
 
 ```bash
 provenant serve ./myrepo
@@ -71,7 +88,7 @@ provenant serve ./myrepo
 
 ---
 
-## ⚡ Quickstart
+## Quickstart
 
 ```bash
 pip install provenant
@@ -85,39 +102,39 @@ provenant costs ./myrepo
 
 ---
 
-## 🧠 What Provenant Builds
+## What Provenant Builds
 
 Provenant runs once, builds everything, then keeps it in sync.
 
-### ◆ Documentation Intelligence
+### Documentation Intelligence
 
-`provenant init` parses your repo with tree-sitter across 15+ languages, builds a symbol + import graph, and generates plain-English wiki pages for every file — purpose, public API, key functions, relationships. Stored locally in `.provenant/`. Nothing leaves your machine except the LLM calls used to generate summaries.
+`provenant init` parses your repo with tree-sitter across 15+ languages, builds a symbol + import graph, and generates plain-English wiki pages for every file: purpose, public API, key functions, relationships. Stored locally in `.provenant/`. Nothing leaves your machine except the LLM calls used to generate summaries.
 
 When an agent asks a question, Provenant retrieves wiki pages instead of raw source. Prose matches natural-language queries the way code cannot.
 
-### ◆ Attribution Confidence & Self-Healing
+### Attribution Confidence & Self-Healing
 
-Every response computes `confidence = cited pages / retrieved pages`. Low-confidence answers automatically trigger background wiki repair — non-blocking, no command needed. On a 1,393-page Django index, rewriting just 10 pages fixed 75% of low-confidence queries at ~$0.02 total.
+Every response computes `confidence = cited pages / retrieved pages`. Low-confidence answers automatically trigger background wiki repair: non-blocking, no command needed. In the Django repair study, 2 of 4 low-confidence queries improved after repair, average judge score moved from 4.50 to 4.75, and only 10 of 1,393 pages needed rewriting at about $0.02.
 
-### ◆ Graph Intelligence
+### Graph Intelligence
 
-tree-sitter parses every file into a two-tier dependency graph — file nodes and symbol nodes (functions, classes, methods). Heritage extraction covers extends, implements, mixins, and trait impls across 15 languages. PageRank + betweenness centrality identify your most central and most coupled code.
+tree-sitter parses every file into a two-tier dependency graph: file nodes and symbol nodes (functions, classes, methods). Heritage extraction covers extends, implements, mixins, and trait impls across 15 languages. PageRank + betweenness centrality identify your most central and most coupled code.
 
-### ◆ Dead Code Analysis
+### Dead Code Analysis
 
 Identifies unreachable functions, classes, and modules. Groups by confidence tier (definite / likely / possible). Flags safe-to-delete vs. dynamically-called code. Works across Python, TypeScript, Go, Rust, and more.
 
-### ◆ Risk Scoring
+### Risk Scoring
 
-Change frequency × dependency centrality × test coverage gaps → per-file risk score. Know what breaks before you touch it.
+Change frequency x dependency centrality x test coverage gaps -> per-file risk score. Know what breaks before you touch it.
 
-### ◆ Git Archaeology
+### Git Archaeology
 
 `provenant_why` traces why code exists: git blame, commit history, and architectural decisions linked to the files your agent is editing.
 
 ---
 
-## 🗂️ Monorepo / Workspace Support
+## Monorepo / Workspace Support
 
 ```bash
 provenant init ./my-project
@@ -127,11 +144,11 @@ provenant init ./my-project
 #   mobile/      (React Native)
 ```
 
-Each sub-repo gets its own wiki. Cross-repo context is linked automatically — questions about the frontend surface relevant backend files and vice versa.
+Each sub-repo gets its own wiki. Cross-repo context is linked automatically: questions about the frontend surface relevant backend files and vice versa.
 
 ---
 
-## 🖥️ Web Dashboard
+## Web Dashboard
 
 ```bash
 provenant serve ./myrepo   # MCP server + local web UI
@@ -141,7 +158,7 @@ Visualize the knowledge graph, wiki pages, dead code report, risk scores, and re
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ```bash
 # LLM provider (pick one)
@@ -149,7 +166,7 @@ ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 DEEPSEEK_API_KEY=...
 
-# Embedder — optional, enables vector search + HyDE
+# Embedder: optional, enables vector search + HyDE
 OPENAI_EMBEDDING_API_KEY=...
 OPENAI_EMBEDDING_MODEL=nomic-embed-text-v1.5
 OPENAI_EMBEDDING_BASE_URL=https://api.fireworks.ai/inference/v1
@@ -159,10 +176,10 @@ provenant init ./myrepo --embedder local     # free, ~40 MB, no API key
 provenant init ./myrepo --embedder openai    # 768-dim, best retrieval
 ```
 
-Self-hostable. Zero telemetry. Bring your own keys — works with Anthropic, OpenAI, DeepSeek, Gemini, OpenRouter, or local Ollama.
+Self-hostable. Zero telemetry. Bring your own keys: works with Anthropic, OpenAI, DeepSeek, Gemini, OpenRouter, or local Ollama.
 
 ---
 
-## 📄 License
+## License
 
 MIT
