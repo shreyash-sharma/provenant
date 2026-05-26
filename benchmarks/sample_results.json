@@ -1,0 +1,53 @@
+{
+  "dataset": "SWE-bench Verified",
+  "tasks": 500,
+  "repositories_total": 12,
+  "repositories_reported_per_repo": 9,
+  "file_localization": {
+    "raw_bm25_source_files": {
+      "coverage_at_5": 0.562,
+      "coverage_at_10": 0.69,
+      "mrr": 0.404
+    },
+    "provenant_bm25_wiki_pages": {
+      "coverage_at_5": 0.638,
+      "coverage_at_10": 0.708,
+      "mrr": 0.447,
+      "coverage_at_5_delta_pp": 7.6
+    },
+    "provenant_reranker_selective_hyde": {
+      "coverage_at_5": 0.662,
+      "coverage_at_10": 0.752,
+      "mrr": 0.454,
+      "coverage_at_5_delta_pp": 10.0
+    }
+  },
+  "token_efficiency": {
+    "flask": {
+      "wiki_tokens": 1070,
+      "naive_source_tokens": 69044,
+      "reduction_ratio": 64.5
+    },
+    "django": {
+      "wiki_tokens": 994,
+      "naive_source_tokens": 59634,
+      "reduction_ratio": 60.0,
+      "quality_delta_avg": -0.15,
+      "exact_ties": 8,
+      "questions": 20
+    }
+  },
+  "repair": {
+    "low_confidence_queries": 4,
+    "queries_improved": 2,
+    "average_judge_before": 4.5,
+    "average_judge_after": 4.75,
+    "pages_repaired": 10,
+    "total_pages": 1393,
+    "estimated_cost_usd": 0.02
+  },
+  "attribution_confidence": {
+    "definition": "cited_pages / retrieved_pages",
+    "pearson_r_quality": 0.415
+  }
+}

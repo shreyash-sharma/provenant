@@ -1,0 +1,4 @@
+method,coverage_at_5,coverage_at_10,mrr,delta_c5_pp,notes
+Raw BM25 on source files,56.2,69.0,0.404,0.0,baseline over source files
+Provenant BM25 on wiki pages,63.8,70.8,0.447,7.6,wiki page retrieval
+Provenant reranker selective HyDE,66.2,75.2,0.454,10.0,reranker plus selective HyDE

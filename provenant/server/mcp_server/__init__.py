@@ -1,4 +1,4 @@
-"""provenant MCP Server — 7 tools for AI coding assistants.
+"""provenant MCP Server — 8 tools for AI coding assistants.
 
 Exposes the full provenant wiki as queryable tools via the MCP protocol.
 Supports both stdio transport (Claude Code, Cursor, Cline) and SSE transport
@@ -36,6 +36,7 @@ from provenant.server.mcp_server.tool_dead_code import provenant_dead_code
 from provenant.server.mcp_server.tool_overview import provenant_overview
 from provenant.server.mcp_server.tool_risk import provenant_risk
 from provenant.server.mcp_server.tool_search import provenant_search
+from provenant.server.mcp_server.tool_symbol import provenant_symbol
 from provenant.server.mcp_server.tool_why import provenant_why
 
 # ---------------------------------------------------------------------------
@@ -100,4 +101,5 @@ __all__ = [
     "mcp",
     "run_mcp",
     "provenant_search",
+    "provenant_symbol",
 ]

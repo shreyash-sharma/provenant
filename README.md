@@ -48,7 +48,7 @@ The outcome is practical: fewer file reads, lower token cost, better issue-file 
 
 Provenant was evaluated on SWE-bench Verified and reduced repo context size by 60-65x while improving top-5 issue-file coverage to 63.8%.
 
-Whitepaper: https://www.shreyashsharma.com/writing/provenant
+Read the whitepaper: https://www.shreyashsharma.com/writing/provenant
 
 ---
 
@@ -116,7 +116,7 @@ pip install provenant
 provenant init ./myrepo        # index repo, generate wiki
 provenant serve ./myrepo       # MCP server + web dashboard
 
-provenant ask "how does auth work?" --repo ./myrepo
+provenant ask "how does auth work?" --path ./myrepo
 provenant costs ./myrepo
 ```
 
