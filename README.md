@@ -32,6 +32,26 @@
 
 ---
 
+# Provenant
+
+Your coding agent does not need more context.
+
+It needs better context.
+
+Most AI coding tools burn tokens by searching, opening, and re-reading files until they stumble into the right part of the codebase. That works on small repos. It breaks down when the system has history, hidden dependencies, stale code, risky modules, and decisions buried across commits.
+
+Provenant builds a local codebase memory layer before the agent starts guessing.
+
+It turns your repository into searchable, cited intelligence: generated wiki pages, dependency structure, symbol-level context, git archaeology, dead-code signals, risk scoring, and repairable retrieval indexes. Your agent queries Provenant through MCP and gets focused context instead of raw file sprawl.
+
+The outcome is practical: fewer file reads, lower token cost, better issue-file coverage, and less hallucinated reasoning about unfamiliar code.
+
+Provenant was evaluated on SWE-bench Verified and reduced repo context size by 60-65x while improving top-5 issue-file coverage to 63.8%.
+
+Whitepaper: https://www.shreyashsharma.com/writing/provenant
+
+---
+
 ## Evaluation Summary
 
 Provenant was evaluated on **SWE-bench Verified**: 500 real GitHub issues across 12 Python repositories.
