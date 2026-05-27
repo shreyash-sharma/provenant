@@ -1,99 +1,84 @@
 <p align="center">
-  <img src="provenant.png" alt="Provenant" width="460"/>
+  <img src="provenant.png" alt="Provenant" width="420"/>
+</p>
+
+<h1 align="center">Provenant</h1>
+
+<p align="center">
+  <strong>Your coding agent does not need more context. It needs better context.</strong>
 </p>
 
 <p align="center">
-  <strong>The codebase intelligence layer for your AI coding agent.</strong>
+  Local codebase memory for AI coding agents: cited retrieval, generated wiki pages,
+  symbol context, git archaeology, dead-code signals, and risk-aware answers through MCP.
 </p>
 
 <p align="center">
-  Evaluated on SWE-bench Verified: <strong>63.8% File Coverage@5</strong> and <strong>60-65x lower context size</strong> versus naive file loading.
+  Evaluated on SWE-bench Verified: <strong>63.8% File Coverage@5</strong>,
+  <strong>75.2% File Coverage@10</strong> with full retrieval, and
+  <strong>60-65x lower context size</strong> versus naive file loading.
 </p>
 
 <p align="center">
-  Wiki indexing &nbsp;|&nbsp; BM25 + HyDE retrieval &nbsp;|&nbsp; Self-healing index &nbsp;|&nbsp; Dead code &nbsp;|&nbsp; Risk &nbsp;|&nbsp; Git archaeology
+  <a href="https://pypi.org/project/provenant/"><img src="https://img.shields.io/pypi/v/provenant?color=E8651A&label=pypi" alt="PyPI"/></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-1A1A1A" alt="Python 3.11+"/>
+  <img src="https://img.shields.io/badge/license-MIT-1A1A1A" alt="MIT License"/>
+  <img src="https://img.shields.io/badge/MCP-compatible-E8651A" alt="MCP compatible"/>
+  <a href="https://github.com/shreyash-sharma/provenant"><img src="https://img.shields.io/github/stars/shreyash-sharma/provenant?style=social" alt="GitHub stars"/></a>
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/provenant/"><img src="https://img.shields.io/pypi/v/provenant?color=blue&label=pypi" alt="PyPI"/></a>
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
-  <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python"/>
-  <img src="https://img.shields.io/badge/MCP-compatible-orange" alt="MCP"/>
-  <a href="https://github.com/shreyash-sharma/provenant"><img src="https://img.shields.io/github/stars/shreyash-sharma/provenant?style=social" alt="Stars"/></a>
-</p>
-
-<p align="center">
-  <a href="EVALUATION.md"><strong>Evaluation</strong></a>
+  <a href="#quickstart"><strong>Quickstart</strong></a>
   &nbsp;|&nbsp;
-  <a href="benchmarks/README.md"><strong>Benchmark artifacts</strong></a>
+  <a href="#evaluation"><strong>Evaluation</strong></a>
+  &nbsp;|&nbsp;
+  <a href="#mcp-tools"><strong>MCP tools</strong></a>
   &nbsp;|&nbsp;
   <a href="https://www.shreyashsharma.com/writing/provenant"><strong>Whitepaper</strong></a>
 </p>
 
 ---
 
-# Provenant
+## The Problem
 
-Your coding agent does not need more context.
+AI coding agents waste context. They search, open, and re-read raw files until they stumble into the right part of the repo. That works on small projects. It breaks down when the system has history, hidden dependencies, stale code, risky modules, and architectural decisions buried across commits.
 
-It needs better context.
+Provenant builds a local codebase intelligence layer before the agent starts guessing.
 
-Most AI coding tools burn tokens by searching, opening, and re-reading files until they stumble into the right part of the codebase. That works on small repos. It breaks down when the system has history, hidden dependencies, stale code, risky modules, and decisions buried across commits.
+It turns your repository into searchable, cited memory: generated wiki pages, dependency structure, symbol-level context, git archaeology, dead-code signals, risk scoring, and repairable retrieval indexes. Your agent asks Provenant for focused context instead of dragging raw file sprawl into every prompt.
 
-Provenant builds a local codebase memory layer before the agent starts guessing.
+<table>
+  <tr>
+    <td><strong>Context efficiency</strong><br/>60-65x lower context size versus naive file loading on Flask/Django QA workloads.</td>
+    <td><strong>Better file localization</strong><br/>63.8% File Coverage@5 on SWE-bench Verified with wiki BM25 retrieval.</td>
+    <td><strong>Grounded answers</strong><br/>Responses cite retrieved pages and report attribution confidence.</td>
+  </tr>
+  <tr>
+    <td><strong>Self-healing retrieval</strong><br/>Low-confidence answers trigger background wiki repair without blocking the agent.</td>
+    <td><strong>Local by default</strong><br/>Indexes live in <code>.provenant/</code>. Bring your own model keys or local providers.</td>
+    <td><strong>MCP-native</strong><br/>Eight tools for Claude Code, Cursor, Windsurf, Cline, and other MCP-compatible clients.</td>
+  </tr>
+</table>
 
-It turns your repository into searchable, cited intelligence: generated wiki pages, dependency structure, symbol-level context, git archaeology, dead-code signals, risk scoring, and repairable retrieval indexes. Your agent queries Provenant through MCP and gets focused context instead of raw file sprawl.
-
-The outcome is practical: fewer file reads, lower token cost, better issue-file coverage, and less hallucinated reasoning about unfamiliar code.
-
-Provenant was evaluated on SWE-bench Verified and reduced repo context size by 60-65x while improving top-5 issue-file coverage to 63.8%.
-
-Read the whitepaper: https://www.shreyashsharma.com/writing/provenant
-
----
-
-## Evaluation Summary
-
-Provenant was evaluated on **SWE-bench Verified**: 500 real GitHub issues across 12 Python repositories.
-
-Full methodology, benchmark setup, and result discussion are available in the whitepaper:
-https://www.shreyashsharma.com/writing/provenant
-
-A longer research manuscript is currently under submission.
-
-| Metric | Baseline | Provenant | Delta |
-|--------|----------|-----------|------:|
-| File Coverage@5 | 56.2% raw BM25 | **63.8%** wiki BM25 | **+7.6 pp** |
-| File Coverage@5, full config | 56.2% raw BM25 | **66.2%** reranker + selective HyDE | **+10.0 pp** |
-| File Coverage@10, full config | 69.0% raw BM25 | **75.2%** | **+6.2 pp** |
-| MRR, full config | 0.404 raw BM25 | **0.454** | **+0.050** |
-| Tokens vs naive file reading | baseline | **60-65x lower** | measured on Flask/Django QA |
-| Answer quality (LLM judge) | baseline | parity | **-0.15/5** average delta |
-| Low-confidence query repair | 4 low-confidence queries | **2 improved** | avg judge **4.50 -> 4.75** |
-| Cost per repair cycle | - | **~$0.02** | 10 pages repaired / 1,393 |
-
-See [EVALUATION.md](EVALUATION.md) and [benchmarks/](benchmarks/) for the compressed proof trail.
-
----
-
-## MCP Tools
-
-Eight tools, usable from Claude Code, Cursor, Windsurf, Cline, and Copilot:
-
-| Tool | What it does |
-|------|-------------|
-| `provenant_ask` | Hybrid BM25 + HyDE retrieval -> cited answer with confidence score |
-| `provenant_context` | Triage cards for files, modules, symbols: purpose, API, freshness |
-| `provenant_search` | Semantic search over wiki content |
-| `provenant_overview` | Architecture summary, entry points, dependency structure |
-| `provenant_symbol` | Byte-precise source retrieval for a specific function or class |
-| `provenant_dead_code` | Unreachable code with confidence tiers and safe-to-delete flags |
-| `provenant_risk` | Hotspot scores, change frequency, test coverage gaps, blast radius |
-| `provenant_why` | Architectural decisions and git archaeology: why does this code exist? |
+## Quickstart
 
 ```bash
-provenant serve ./myrepo
+pip install provenant
 ```
+
+```bash
+provenant init ./myrepo        # index repo, generate wiki, build retrieval state
+provenant serve ./myrepo       # MCP server + local web dashboard
+```
+
+Ask from the CLI:
+
+```bash
+provenant ask "how does auth work?" --path ./myrepo
+provenant costs ./myrepo
+```
+
+Use from an MCP client:
 
 ```json
 {
@@ -106,99 +91,147 @@ provenant serve ./myrepo
 }
 ```
 
----
+## Evaluation
 
-## Quickstart
+Provenant was evaluated on **SWE-bench Verified**: 500 real GitHub issues across 12 Python repositories.
 
-```bash
-pip install provenant
+| Result | Baseline | Provenant | Delta |
+|---|---:|---:|---:|
+| File Coverage@5 | 56.2% raw BM25 | **63.8%** wiki BM25 | **+7.6 pp** |
+| File Coverage@5, full config | 56.2% raw BM25 | **66.2%** reranker + selective HyDE | **+10.0 pp** |
+| File Coverage@10, full config | 69.0% raw BM25 | **75.2%** | **+6.2 pp** |
+| MRR, full config | 0.404 raw BM25 | **0.454** | **+0.050** |
+| Context size | naive file loading | **60-65x lower** | measured on Flask/Django QA |
+| Answer quality | baseline | parity | **-0.15/5** average delta |
+| Low-confidence repair | 4 low-confidence queries | **2 improved** | avg judge **4.50 -> 4.75** |
+| Repair cost | - | **~$0.02** | 10 pages repaired / 1,393 |
 
-provenant init ./myrepo        # index repo, generate wiki
-provenant serve ./myrepo       # MCP server + web dashboard
+File Coverage@5 means the correct issue-relevant file appears in the top 5 retrieved results. File Coverage@10 uses the top 10. MRR is mean reciprocal rank.
 
-provenant ask "how does auth work?" --path ./myrepo
-provenant costs ./myrepo
+Evidence trail:
+
+- [Evaluation summary](EVALUATION.md)
+- [Benchmark artifacts](benchmarks/)
+- [Read the whitepaper](https://www.shreyashsharma.com/writing/provenant)
+
+A longer research manuscript is currently under submission.
+
+## How It Works
+
+```text
+repo
+  -> tree-sitter parse
+  -> symbol + import graph
+  -> generated wiki pages
+  -> BM25 / vector / HyDE retrieval
+  -> cited MCP answers
+  -> confidence-gated repair
 ```
 
----
+| Stage | What Provenant builds | Why agents care |
+|---|---|---|
+| Parse | File graph, symbol graph, imports, inheritance, entry points | The agent sees structure before opening files. |
+| Explain | Plain-English wiki pages for files and modules | Natural-language questions match prose better than syntax. |
+| Retrieve | BM25, optional vector search, selective HyDE, reranking | The agent gets the right code area with fewer tokens. |
+| Ground | Citations, confidence, source-linked context | Answers are inspectable instead of free-floating. |
+| Repair | Background rewrites for low-confidence pages | Retrieval improves as the repo is used. |
 
-## What Provenant Builds
+## MCP Tools
 
-Provenant runs once, builds everything, then keeps it in sync.
+| Tool | Use it for |
+|---|---|
+| `provenant_ask` | Hybrid BM25 + HyDE retrieval with cited answers and confidence scores. |
+| `provenant_context` | File, module, and symbol triage cards: purpose, API, relationships, freshness. |
+| `provenant_search` | Semantic search over generated wiki content. |
+| `provenant_overview` | Architecture summary, entry points, dependency structure, and repo map. |
+| `provenant_symbol` | Byte-precise source retrieval for a specific function, class, or method. |
+| `provenant_dead_code` | Unreachable code with confidence tiers and safe-to-delete flags. |
+| `provenant_risk` | Hotspot scores, change frequency, test coverage gaps, and blast radius. |
+| `provenant_why` | Git archaeology: blame, commit history, and architectural decisions. |
 
-### Documentation Intelligence
+## What You Get
 
-`provenant init` parses your repo with tree-sitter across 15+ languages, builds a symbol + import graph, and generates plain-English wiki pages for every file: purpose, public API, key functions, relationships. Stored locally in `.provenant/`. Nothing leaves your machine except the LLM calls used to generate summaries.
+### Codebase wiki
 
-When an agent asks a question, Provenant retrieves wiki pages instead of raw source. Prose matches natural-language queries the way code cannot.
+`provenant init` parses your repo with tree-sitter across 15+ languages and generates plain-English wiki pages for every file: purpose, public API, key functions, relationships, and implementation notes. The wiki is stored locally in `.provenant/`.
 
-### Attribution Confidence & Self-Healing
+### Attribution confidence
 
-Every response computes `confidence = cited pages / retrieved pages`. Low-confidence answers automatically trigger background wiki repair: non-blocking, no command needed. In the Django repair study, 2 of 4 low-confidence queries improved after repair, average judge score moved from 4.50 to 4.75, and only 10 of 1,393 pages needed rewriting at about $0.02.
+Every answer computes `confidence = cited pages / retrieved pages`. Low confidence is a signal that the wiki or retrieval index should be improved. Provenant uses that signal for repair instead of blindly trusting the first answer.
 
-### Graph Intelligence
+### Self-healing index
 
-tree-sitter parses every file into a two-tier dependency graph: file nodes and symbol nodes (functions, classes, methods). Heritage extraction covers extends, implements, mixins, and trait impls across 15 languages. PageRank + betweenness centrality identify your most central and most coupled code.
+Low-confidence answers can trigger background wiki repair. Agents do not wait on repair, and confidence-gated rewrites prevent uncontrolled churn. In the Django repair study, 2 of 4 low-confidence queries improved, average judge score moved from 4.50 to 4.75, and only 10 of 1,393 pages needed rewriting at about $0.02.
 
-### Dead Code Analysis
+### Dependency and risk graph
 
-Identifies unreachable functions, classes, and modules. Groups by confidence tier (definite / likely / possible). Flags safe-to-delete vs. dynamically-called code. Works across Python, TypeScript, Go, Rust, and more.
+Provenant extracts file nodes, symbol nodes, imports, inheritance, mixins, and trait impls where supported. PageRank and betweenness centrality identify central code; risk scoring combines change frequency, dependency centrality, and test coverage gaps.
 
-### Risk Scoring
+### Dead-code analysis
 
-Change frequency x dependency centrality x test coverage gaps -> per-file risk score. Know what breaks before you touch it.
+Find unreachable functions, classes, and modules. Findings are grouped by confidence tier and marked safe-to-delete when Provenant can avoid dynamic-call ambiguity.
 
-### Git Archaeology
+### Git archaeology
 
-`provenant_why` traces why code exists: git blame, commit history, and architectural decisions linked to the files your agent is editing.
-
----
-
-## Monorepo / Workspace Support
-
-```bash
-provenant init ./my-project
-# Detected 3 repositories:
-#   backend/     (Django)
-#   frontend/    (React/TypeScript)
-#   mobile/      (React Native)
-```
-
-Each sub-repo gets its own wiki. Cross-repo context is linked automatically: questions about the frontend surface relevant backend files and vice versa.
-
----
+`provenant_why` traces why code exists: git blame, related commits, and architectural decisions linked to the files your agent is editing.
 
 ## Web Dashboard
 
 ```bash
-provenant serve ./myrepo   # MCP server + local web UI
+provenant serve ./myrepo
 ```
 
-Visualize the knowledge graph, wiki pages, dead code report, risk scores, and repair candidates in a local browser dashboard. No external services required.
+The local dashboard visualizes wiki pages, graph structure, dead-code findings, risk scores, repair candidates, and retrieval state. It is useful when you want to inspect the same memory layer your agent is querying.
 
----
+## Monorepos
+
+```bash
+provenant init ./my-project
+# Detected 3 repositories:
+#   backend/     Django
+#   frontend/    React/TypeScript
+#   mobile/      React Native
+```
+
+Each sub-repo gets its own wiki. Cross-repo context is linked so frontend questions can surface backend files and backend questions can surface client usage.
 
 ## Configuration
 
+Set one LLM provider for wiki generation and answer synthesis:
+
 ```bash
-# LLM provider (pick one)
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 DEEPSEEK_API_KEY=...
+GEMINI_API_KEY=...
+```
 
-# Embedder: optional, enables vector search + HyDE
+Choose an embedder:
+
+```bash
+provenant init ./myrepo --embedder local     # free, small local model, no API key
+provenant init ./myrepo --embedder openai    # hosted embeddings, stronger retrieval
+```
+
+Optional embedding settings:
+
+```bash
 OPENAI_EMBEDDING_API_KEY=...
 OPENAI_EMBEDDING_MODEL=nomic-embed-text-v1.5
 OPENAI_EMBEDDING_BASE_URL=https://api.fireworks.ai/inference/v1
-
-# Embedding tiers
-provenant init ./myrepo --embedder local     # free, ~40 MB, no API key
-provenant init ./myrepo --embedder openai    # 768-dim, best retrieval
 ```
 
-Self-hostable. Zero telemetry. Bring your own keys: works with Anthropic, OpenAI, DeepSeek, Gemini, OpenRouter, or local Ollama.
+Provenant is self-hostable and has no product telemetry. Repository indexes stay local; only the configured LLM or embedding calls leave your machine.
 
----
+## When To Use Provenant
+
+Use Provenant when:
+
+- Your agent keeps opening too many files before making progress.
+- The repo is old enough that "why does this exist?" matters.
+- You need cited answers instead of plausible summaries.
+- Risk, dead code, and dependency structure matter before edits.
+- You want MCP tools that work across editors instead of a single-agent plugin.
 
 ## License
 
