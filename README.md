@@ -39,7 +39,7 @@
 
 ---
 
-## The Problem
+## 🧭 The Problem
 
 AI coding agents waste context. They search, open, and re-read raw files until they stumble into the right part of the repo. That works on small projects. It breaks down when the system has history, hidden dependencies, stale code, risky modules, and architectural decisions buried across commits.
 
@@ -49,18 +49,18 @@ It turns your repository into searchable, cited memory: generated wiki pages, de
 
 <table>
   <tr>
-    <td><strong>Context efficiency</strong><br/>60-65x lower context size versus naive file loading on Flask/Django QA workloads.</td>
-    <td><strong>Better file localization</strong><br/>63.8% File Coverage@5 on SWE-bench Verified with wiki BM25 retrieval.</td>
-    <td><strong>Grounded answers</strong><br/>Responses cite retrieved pages and report attribution confidence.</td>
+    <td><strong>⚡ Context efficiency</strong><br/>60-65x lower context size versus naive file loading on Flask/Django QA workloads.</td>
+    <td><strong>🎯 Better file localization</strong><br/>63.8% File Coverage@5 on SWE-bench Verified with wiki BM25 retrieval.</td>
+    <td><strong>📎 Grounded answers</strong><br/>Responses cite retrieved pages and report attribution confidence.</td>
   </tr>
   <tr>
-    <td><strong>Self-healing retrieval</strong><br/>Low-confidence answers trigger background wiki repair without blocking the agent.</td>
-    <td><strong>Local by default</strong><br/>Indexes live in <code>.provenant/</code>. Bring your own model keys or local providers.</td>
-    <td><strong>MCP-native</strong><br/>Eight tools for Claude Code, Cursor, Windsurf, Cline, and other MCP-compatible clients.</td>
+    <td><strong>🛠️ Self-healing retrieval</strong><br/>Low-confidence answers trigger background wiki repair without blocking the agent.</td>
+    <td><strong>🔒 Local by default</strong><br/>Indexes live in <code>.provenant/</code>. Bring your own model keys or local providers.</td>
+    <td><strong>🔌 MCP-native</strong><br/>Eight tools for Claude Code, Cursor, Windsurf, Cline, and other MCP-compatible clients.</td>
   </tr>
 </table>
 
-## Quickstart
+## ⚡ Quickstart
 
 ```bash
 pip install provenant
@@ -91,7 +91,7 @@ Use from an MCP client:
 }
 ```
 
-## Evaluation
+## 📊 Evaluation
 
 Provenant was evaluated on **SWE-bench Verified**: 500 real GitHub issues across 12 Python repositories.
 
@@ -116,7 +116,7 @@ Evidence trail:
 
 A longer research manuscript is currently under submission.
 
-## How It Works
+## 🧠 How It Works
 
 ```text
 repo
@@ -136,7 +136,7 @@ repo
 | Ground | Citations, confidence, source-linked context | Answers are inspectable instead of free-floating. |
 | Repair | Background rewrites for low-confidence pages | Retrieval improves as the repo is used. |
 
-## MCP Tools
+## 🔌 MCP Tools
 
 | Tool | Use it for |
 |---|---|
@@ -149,7 +149,7 @@ repo
 | `provenant_risk` | Hotspot scores, change frequency, test coverage gaps, and blast radius. |
 | `provenant_why` | Git archaeology: blame, commit history, and architectural decisions. |
 
-## What You Get
+## 🧰 What You Get
 
 ### Codebase wiki
 
@@ -175,7 +175,7 @@ Find unreachable functions, classes, and modules. Findings are grouped by confid
 
 `provenant_why` traces why code exists: git blame, related commits, and architectural decisions linked to the files your agent is editing.
 
-## Web Dashboard
+## 🖥️ Web Dashboard
 
 ```bash
 provenant serve ./myrepo
@@ -183,7 +183,7 @@ provenant serve ./myrepo
 
 The local dashboard visualizes wiki pages, graph structure, dead-code findings, risk scores, repair candidates, and retrieval state. It is useful when you want to inspect the same memory layer your agent is querying.
 
-## Monorepos
+## 🧩 Monorepos
 
 ```bash
 provenant init ./my-project
@@ -195,7 +195,7 @@ provenant init ./my-project
 
 Each sub-repo gets its own wiki. Cross-repo context is linked so frontend questions can surface backend files and backend questions can surface client usage.
 
-## Configuration
+## ⚙️ Configuration
 
 Set one LLM provider for wiki generation and answer synthesis:
 
@@ -223,7 +223,7 @@ OPENAI_EMBEDDING_BASE_URL=https://api.fireworks.ai/inference/v1
 
 Provenant is self-hostable and has no product telemetry. Repository indexes stay local; only the configured LLM or embedding calls leave your machine.
 
-## When To Use Provenant
+## ✅ When To Use Provenant
 
 Use Provenant when:
 
@@ -233,6 +233,6 @@ Use Provenant when:
 - Risk, dead code, and dependency structure matter before edits.
 - You want MCP tools that work across editors instead of a single-agent plugin.
 
-## License
+## 📄 License
 
 MIT
