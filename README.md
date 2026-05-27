@@ -28,6 +28,8 @@
 </p>
 
 <p align="center">
+  <a href="#provenant"><strong>Intro</strong></a>
+  &nbsp;|&nbsp;
   <a href="#quickstart"><strong>Quickstart</strong></a>
   &nbsp;|&nbsp;
   <a href="#evaluation"><strong>Evaluation</strong></a>
@@ -38,6 +40,22 @@
 </p>
 
 ---
+
+## 👋 Provenant
+
+Provenant is a Command Line Interface (CLI) and MCP server designed to give AI coding agents a local memory layer for your repository. Integrate Provenant into Claude Code, Cursor, Windsurf, Cline, Copilot, or any MCP-compatible agent to retrieve focused, cited codebase context instead of repeatedly loading raw files.
+
+Provenant reads your codebase, builds generated wiki pages, tracks symbols and dependencies, extracts git history, scores risky files, detects dead code, and exposes all of it through agent-friendly tools. It runs locally against your existing Git repository and stores its index in `.provenant/`.
+
+Using a codebase memory layer for coding agents offers a range of benefits:
+
+- **Lower token waste:** Give agents compact wiki context instead of thousands of raw source tokens.
+- **Faster file localization:** Help agents find the files that matter before they start editing.
+- **Grounded answers:** Return cited context so claims can be traced back to repository evidence.
+- **Safer changes:** Surface risk, dependency centrality, dead-code signals, and likely blast radius.
+- **Architectural memory:** Answer "why does this code exist?" using git history and decision context.
+- **Self-improving retrieval:** Low-confidence answers can trigger background wiki repair.
+- **Editor portability:** Use the same memory layer from any MCP-compatible coding agent.
 
 ## 🧭 The Problem
 
