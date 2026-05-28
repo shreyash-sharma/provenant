@@ -57,9 +57,9 @@ Using a codebase memory layer for coding agents offers a range of benefits:
 - **Self-improving retrieval:** Low-confidence answers can trigger background wiki repair.
 - **Editor portability:** Use the same memory layer from any MCP-compatible coding agent.
 
-<p align="center">
-  <img src="demo/demoG.gif" alt="Provenant demo" width="900"/>
-</p>
+
+<img width="1152" height="648" alt="demoG" src="https://github.com/user-attachments/assets/ea1a0078-e81e-4ed1-b2e9-a3bc664f0333" />
+
 
 ## 🧭 The Problem
 
