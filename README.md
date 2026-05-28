@@ -41,7 +41,7 @@
 
 ---
 
-## 👋 Provenant
+## 🧠 Provenant
 
 Provenant is a Command Line Interface (CLI) and MCP server designed to give AI coding agents a local memory layer for your repository. Integrate Provenant into Claude Code, Cursor, Windsurf, Cline, Copilot, or any MCP-compatible agent to retrieve focused, cited codebase context instead of repeatedly loading raw files.
 
@@ -56,6 +56,10 @@ Using a codebase memory layer for coding agents offers a range of benefits:
 - **Architectural memory:** Answer "why does this code exist?" using git history and decision context.
 - **Self-improving retrieval:** Low-confidence answers can trigger background wiki repair.
 - **Editor portability:** Use the same memory layer from any MCP-compatible coding agent.
+
+<p align="center">
+  <img src="demo/demoG.gif" alt="Provenant demo" width="900"/>
+</p>
 
 ## 🧭 The Problem
 
@@ -89,14 +93,7 @@ provenant init ./myrepo        # index repo, generate wiki, build retrieval stat
 provenant serve ./myrepo       # MCP server + local web dashboard
 ```
 
-Ask from the CLI:
-
-```bash
-provenant ask "how does auth work?" --path ./myrepo
-provenant costs ./myrepo
-```
-
-Use from an MCP client:
+Use Provenant from Claude Code, Cursor, Windsurf, Cline, Copilot, or any MCP-compatible coding agent:
 
 ```json
 {
