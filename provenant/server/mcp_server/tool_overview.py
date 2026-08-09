@@ -165,8 +165,7 @@ def _build_workspace_footer() -> dict | None:
     return footer
 
 
-@mcp.tool()
-async def provenant_overview(repo: str | None = None) -> dict:
+async def _provenant_overview_impl(repo: str | None = None) -> dict:
     """Get the repository overview: architecture summary, module map, key entry points.
 
     Best first call when starting to explore an unfamiliar codebase.
@@ -424,4 +423,22 @@ async def provenant_overview(repo: str | None = None) -> dict:
         if ws_footer:
             result["workspace"] = ws_footer
 
-        return result
+    return result
+
+
+@mcp.tool()
+async def provenant_overview(repo: str | None = None) -> dict:
+    """Get the repository overview: architecture summary, module map, key entry points."""
+    if repo == "all":
+        ctx = (await _resolve_all_contexts())[0]
+    else:
+        ctx = await _resolve_repo_context(repo)
+    from provenant.server.mcp_server._usage_events import record_provenant_tool_call
+
+    return await record_provenant_tool_call(
+        ctx,
+        tool_name="provenant_overview",
+        query_text=repo,
+        target_count=1,
+        call=lambda: _provenant_overview_impl(repo=repo),
+    )

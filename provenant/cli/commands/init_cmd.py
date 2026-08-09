@@ -140,6 +140,53 @@ def _offer_hook_install(
             )
 
 
+def _offer_ccusage_install(console_obj: Any) -> None:
+    """Interactively offer to install ccusage for optional agent telemetry."""
+    if not sys.stdin.isatty():
+        return
+
+    import shutil
+    import subprocess
+
+    if shutil.which("ccusage"):
+        return
+
+    npm = shutil.which("npm")
+    console_obj.print()
+    console_obj.print(
+        "[bold]Measure Provenant savings:[/bold] Provenant can use ccusage to "
+        "show how much agent token usage and estimated cost drops when agents "
+        "work from indexed repo context."
+    )
+    console_obj.print("  What this will do:")
+    console_obj.print("    - run [bold]npm install -g ccusage[/bold]")
+    console_obj.print("    - let the Usage tab compare token and cost trends over time")
+    console_obj.print("    - read local coding-agent usage logs during Provenant sync")
+    console_obj.print("    - keep Provenant usage sync local/offline by default")
+    console_obj.print("    - avoid uploading agent logs from Provenant")
+
+    if not npm:
+        console_obj.print(
+            "  [yellow]Skipped: npm was not found. Install later with "
+            "`npm install -g ccusage`.[/yellow]"
+        )
+        return
+
+    if not click.confirm("  Install ccusage now?", default=False):
+        console_obj.print(
+            "  [dim]Skipped. Install later with `npm install -g ccusage`.[/dim]"
+        )
+        return
+
+    try:
+        subprocess.check_call([npm, "install", "-g", "ccusage"])
+        console_obj.print("  [green]OK[/green] ccusage installed")
+    except subprocess.CalledProcessError:
+        console_obj.print(
+            "  [yellow]Install failed. Run manually: npm install -g ccusage[/yellow]"
+        )
+
+
 def _resolve_embedder(embedder_flag: str | None) -> str:
     """Auto-detect embedder from env vars, or use the flag value."""
     if embedder_flag:
@@ -998,6 +1045,7 @@ def _workspace_init(
             [r.path for r in indexed_repos],
             aliases=[r.alias for r in indexed_repos],
         )
+    _offer_ccusage_install(console)
     console.print()
 
 
@@ -1919,3 +1967,4 @@ def init_command(
 
     # Offer to install post-commit hook (both index-only and full modes)
     _offer_hook_install(console, [repo_path])
+    _offer_ccusage_install(console)

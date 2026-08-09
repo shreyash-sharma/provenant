@@ -113,6 +113,15 @@ class BlastRadiusRequest(BaseModel):
     max_depth: int = Field(3, ge=1, le=6)
 
 
+class UsageSyncRequest(BaseModel):
+    since: str | None = None
+    until: str | None = None
+    include_sessions: bool = True
+    include_blocks: bool = False
+    use_npx: bool = False
+    offline: bool = True
+
+
 def _as_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
@@ -1002,6 +1011,73 @@ def create_app() -> FastAPI:
     # ── Static web UI (Node-free) ────────────────────────────────────────────
     # Prefer bundled static files (shipped in the wheel under server/static/).
     # Falls back to ~/ .provenant/web/ if someone downloaded a newer UI.
+
+    # Agent Usage
+
+    async def _current_repo_id() -> str | None:
+        from provenant.core.persistence.database import get_session
+        from provenant.server.mcp_server import _state
+        from provenant.server.mcp_server._helpers import _get_repo
+
+        try:
+            async with get_session(_state._session_factory) as session:
+                repo = await _get_repo(session)
+                return repo.id
+        except Exception:
+            return None
+
+    @app.get("/api/usage/status")
+    async def agent_usage_status() -> dict[str, Any]:
+        from provenant.core.telemetry.usage import usage_status
+        from provenant.server.mcp_server import _state
+
+        try:
+            return await usage_status(
+                _state._session_factory,
+                repository_id=await _current_repo_id(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise _as_http_error(exc) from exc
+
+    @app.get("/api/usage")
+    async def agent_usage() -> dict[str, Any]:
+        from provenant.core.telemetry.usage import latest_usage_snapshot
+        from provenant.server.mcp_server import _state
+
+        try:
+            data = await latest_usage_snapshot(
+                _state._session_factory,
+                repository_id=await _current_repo_id(),
+            )
+            return data or {"snapshot": None, "rows": [], "groups": {}}
+        except Exception as exc:  # noqa: BLE001
+            raise _as_http_error(exc) from exc
+
+    @app.post("/api/usage/sync")
+    async def agent_usage_sync(body: UsageSyncRequest) -> dict[str, Any]:
+        import asyncio
+
+        from provenant.core.telemetry.adapters.ccusage import collect_ccusage
+        from provenant.core.telemetry.usage import save_usage_snapshot
+        from provenant.server.mcp_server import _state
+
+        try:
+            snapshot = await asyncio.to_thread(
+                collect_ccusage,
+                since=body.since,
+                until=body.until,
+                include_sessions=body.include_sessions,
+                include_blocks=body.include_blocks,
+                use_npx=body.use_npx,
+                offline=body.offline,
+            )
+            return await save_usage_snapshot(
+                _state._session_factory,
+                snapshot,
+                repository_id=await _current_repo_id(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise _as_http_error(exc) from exc
 
     _active_web = _web_dir()
     if _active_web:

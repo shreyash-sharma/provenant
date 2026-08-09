@@ -446,6 +446,76 @@ class LlmCost(Base):
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
 
+class AgentUsageSnapshot(Base):
+    """A persisted import from an external agent-usage tool such as ccusage."""
+
+    __tablename__ = "agent_usage_snapshots"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    repository_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("repositories.id", ondelete="CASCADE"), nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="ccusage")
+    reports_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    since: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    until: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    totals_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now_utc
+    )
+
+
+class AgentUsageRow(Base):
+    """A normalized ccusage row attached to an AgentUsageSnapshot."""
+
+    __tablename__ = "agent_usage_rows"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    snapshot_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_usage_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    repository_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    report_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    date: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    project: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_creation_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_activity: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_activity: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class ProvenantUsageEvent(Base):
+    """A local MCP/REST tool event used to correlate Provenant assistance with agent usage."""
+
+    __tablename__ = "provenant_usage_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    repository_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("repositories.id", ondelete="CASCADE"), nullable=True
+    )
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    returned_target_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    estimated_context_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
 class SecurityFinding(Base):
     """A security signal detected during file ingestion."""
 

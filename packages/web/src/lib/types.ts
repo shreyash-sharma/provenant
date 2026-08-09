@@ -410,6 +410,124 @@ export interface RiskHeatmapResponse {
   };
 }
 
+export interface UsageTotals {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  total_tokens: number;
+  total_cost?: number | null;
+}
+
+export interface UsageGroup extends UsageTotals {
+  key: string;
+  rows: number;
+}
+
+export interface UsageRow extends UsageTotals {
+  id: string;
+  report_type: string;
+  date?: string | null;
+  project?: string | null;
+  agent?: string | null;
+  model?: string | null;
+  session_id?: string | null;
+  first_activity?: string | null;
+  last_activity?: string | null;
+}
+
+export interface ProvenantUsageEvent {
+  id: string;
+  repository_id?: string | null;
+  tool_name: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_ms: number;
+  query_text?: string | null;
+  target_count: number;
+  returned_target_count: number;
+  estimated_context_tokens: number;
+  success: boolean;
+  error_type?: string | null;
+  client_name?: string | null;
+}
+
+export interface UsageSavingsTotals extends UsageTotals {
+  sessions: number;
+  avg_tokens_per_session: number;
+  avg_cost_per_session: number;
+}
+
+export interface UsageSavings {
+  mode: string;
+  label: string;
+  tolerance_minutes: number;
+  assisted: UsageSavingsTotals;
+  unassisted: UsageSavingsTotals;
+  observed_delta: {
+    avg_token_reduction_pct?: number | null;
+    avg_cost_reduction_pct?: number | null;
+  };
+  event_count: number;
+  successful_event_count: number;
+  estimated_context_tokens: number;
+  top_tools: {
+    tool_name: string;
+    calls: number;
+    estimated_context_tokens: number;
+  }[];
+  uncorrelated_sessions: number;
+}
+
+export interface UsageResponse {
+  snapshot: {
+    id: string;
+    source: string;
+    reports: string[];
+    since?: string | null;
+    until?: string | null;
+    totals: UsageTotals;
+    created_at?: string | null;
+  } | null;
+  rows: UsageRow[];
+  provenant_events?: ProvenantUsageEvent[];
+  savings?: UsageSavings | null;
+  groups: {
+    daily?: UsageGroup[];
+    project?: UsageGroup[];
+    agent?: UsageGroup[];
+    model?: UsageGroup[];
+    session?: UsageGroup[];
+  };
+}
+
+export interface UsageStatusResponse {
+  available: boolean;
+  ccusage_path?: string | null;
+  npx_path?: string | null;
+  has_data: boolean;
+  last_sync_at?: string | null;
+  last_snapshot_id?: string | null;
+}
+
+export interface UsageSyncRequest {
+  since?: string | null;
+  until?: string | null;
+  include_sessions?: boolean;
+  include_blocks?: boolean;
+  use_npx?: boolean;
+  offline?: boolean;
+}
+
+export interface UsageSyncResponse {
+  id: string;
+  source: string;
+  reports: string[];
+  row_count: number;
+  totals: UsageTotals;
+  created_at?: string | null;
+}
+
 // /api/repair/run request body + response
 export interface RepairRunRequest {
   dry_run?: boolean;

@@ -1077,8 +1077,7 @@ def _rrf_merge(fts_hits: list, vec_hits: list, k: int = 60, top_n: int = 8) -> l
     return [canonical[pid] for pid in ranked[:top_n]]
 
 
-@mcp.tool()
-async def provenant_ask(
+async def _provenant_ask_impl(
     question: str,
     scope: str | None = None,
     repo: str | None = None,
@@ -1614,3 +1613,34 @@ async def provenant_ask(
     )
 
     return payload
+
+
+@mcp.tool()
+async def provenant_ask(
+    question: str,
+    scope: str | None = None,
+    repo: str | None = None,
+    compress: bool = True,
+    force_synthesize: bool = False,
+    hyde: bool = True,
+) -> dict:
+    """One-call RAG: answer a code question. Always your first call."""
+    if repo == "all":
+        return _unsupported_repo_all("provenant_ask")
+    ctx = await _resolve_repo_context(repo)
+    from provenant.server.mcp_server._usage_events import record_provenant_tool_call
+
+    return await record_provenant_tool_call(
+        ctx,
+        tool_name="provenant_ask",
+        query_text=question,
+        target_count=1,
+        call=lambda: _provenant_ask_impl(
+            question,
+            scope=scope,
+            repo=repo,
+            compress=compress,
+            force_synthesize=force_synthesize,
+            hyde=hyde,
+        ),
+    )

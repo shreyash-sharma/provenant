@@ -12,6 +12,7 @@ const primaryNav = [
   { href: "/model", label: "Model" },
   { href: "/wiki", label: "Wiki" },
   { href: "/knowledge", label: "Map" },
+  { href: "/usage", label: "Usage" },
   { href: "/repair", label: "Repair" },
 ] as const;
 

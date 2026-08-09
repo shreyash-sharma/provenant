@@ -27,6 +27,7 @@ from provenant.cli.commands.search_cmd import search_command
 from provenant.cli.commands.serve_cmd import serve_command
 from provenant.cli.commands.status_cmd import status_command
 from provenant.cli.commands.update_cmd import update_command
+from provenant.cli.commands.usage_cmd import usage_group
 from provenant.cli.commands.watch_cmd import watch_command
 from provenant.cli.commands.workspace_cmd import workspace_group
 from provenant.cli.helpers import console, get_provenant_dir, resolve_repo_path, run_async
@@ -214,6 +215,7 @@ cli.add_command(compression_report_command)
 cli.add_command(export_command)
 cli.add_command(hook_group)
 cli.add_command(status_command)
+cli.add_command(usage_group)
 cli.add_command(doctor_command)
 cli.add_command(watch_command)
 cli.add_command(serve_command)

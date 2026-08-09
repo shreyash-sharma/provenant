@@ -86,8 +86,7 @@ async def _federated_search(query: str, limit: int, page_type: str | None) -> di
     return {"results": output}
 
 
-@mcp.tool()
-async def provenant_search(
+async def _provenant_search_impl(
     query: str,
     limit: int = 5,
     page_type: str | None = None,
@@ -193,3 +192,26 @@ async def provenant_search(
             item["confidence_score"] = round(raw / max_score, 2) if max_score > 0 else 0.0
 
     return {"results": output}
+
+
+@mcp.tool()
+async def provenant_search(
+    query: str,
+    limit: int = 5,
+    page_type: str | None = None,
+    repo: str | None = None,
+) -> dict:
+    """Semantic search over the wiki."""
+    if repo == "all":
+        ctx = (await _resolve_all_contexts())[0]
+    else:
+        ctx = await _resolve_repo_context(repo)
+    from provenant.server.mcp_server._usage_events import record_provenant_tool_call
+
+    return await record_provenant_tool_call(
+        ctx,
+        tool_name="provenant_search",
+        query_text=query,
+        target_count=1,
+        call=lambda: _provenant_search_impl(query, limit=limit, page_type=page_type, repo=repo),
+    )

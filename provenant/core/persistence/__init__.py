@@ -86,6 +86,9 @@ from .database import (
     resolve_db_url,
 )
 from .models import (
+    AgentUsageRow,
+    AgentUsageSnapshot,
+    ProvenantUsageEvent,
     Base,
     ChatMessage,
     Conversation,
@@ -114,6 +117,9 @@ __all__ = [
     "AsyncEngine",
     "AsyncSession",
     # models
+    "AgentUsageRow",
+    "AgentUsageSnapshot",
+    "ProvenantUsageEvent",
     "Base",
     "ChatMessage",
     "Conversation",

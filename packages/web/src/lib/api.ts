@@ -18,6 +18,10 @@ import type {
   RiskResponse,
   RiskOverviewResponse,
   SearchResponse,
+  UsageResponse,
+  UsageStatusResponse,
+  UsageSyncRequest,
+  UsageSyncResponse,
 } from "./types";
 
 // Use relative URLs so the API and the web UI can live on the same origin
@@ -139,4 +143,13 @@ export const api = {
 
   riskHeatmap: (): Promise<RiskHeatmapResponse> =>
     client.get('/api/risk/heatmap').then(r => r.data),
+
+  usageStatus: (): Promise<UsageStatusResponse> =>
+    client.get('/api/usage/status').then(r => r.data),
+
+  usage: (): Promise<UsageResponse> =>
+    client.get('/api/usage').then(r => r.data),
+
+  usageSync: (body: UsageSyncRequest): Promise<UsageSyncResponse> =>
+    client.post('/api/usage/sync', body).then(r => r.data),
 };

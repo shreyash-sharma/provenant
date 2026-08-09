@@ -1065,8 +1065,7 @@ def _truncate_to_budget(
     return result
 
 
-@mcp.tool()
-async def provenant_context(
+async def _provenant_context_impl(
     targets: list[str],
     include: list[str] | None = None,
     compact: bool = True,
@@ -1211,3 +1210,25 @@ async def provenant_context(
 
     # Enforce the global token cap. See ``_truncate_to_budget`` for strategy.
     return _truncate_to_budget(response)
+
+
+@mcp.tool()
+async def provenant_context(
+    targets: list[str],
+    include: list[str] | None = None,
+    compact: bool = True,
+    repo: str | None = None,
+) -> dict:
+    """Compact context for files, modules, or symbols. Batch multiple targets."""
+    if repo == "all":
+        return _unsupported_repo_all("provenant_context")
+    ctx = await _resolve_repo_context(repo)
+    from provenant.server.mcp_server._usage_events import record_provenant_tool_call
+
+    return await record_provenant_tool_call(
+        ctx,
+        tool_name="provenant_context",
+        query_text=", ".join(targets[:5]),
+        target_count=len(targets),
+        call=lambda: _provenant_context_impl(targets, include=include, compact=compact, repo=repo),
+    )
