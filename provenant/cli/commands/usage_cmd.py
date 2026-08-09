@@ -29,6 +29,7 @@ def usage_group() -> None:
 @click.option("--include-blocks", is_flag=True, default=False, help="Also import ccusage blocks.")
 @click.option("--use-npx", is_flag=True, default=False, help="Run via npx ccusage if ccusage is not installed globally.")
 @click.option("--online", is_flag=True, default=False, help="Allow ccusage to refresh pricing data.")
+@click.option("--timeout", "timeout_seconds", default=90, show_default=True, help="Seconds to wait for each ccusage report.")
 @click.option("--json", "as_json", is_flag=True, default=False)
 def usage_sync_command(
     path: str | None,
@@ -38,21 +39,26 @@ def usage_sync_command(
     include_blocks: bool,
     use_npx: bool,
     online: bool,
+    timeout_seconds: int,
     as_json: bool,
 ) -> None:
     """Import a ccusage snapshot into the repo-local Provenant database."""
     repo_path = resolve_repo_path(path)
-    result = run_async(
-        _sync_usage(
-            repo_path,
-            since=since,
-            until=until,
-            include_sessions=include_sessions,
-            include_blocks=include_blocks,
-            use_npx=use_npx,
-            offline=not online,
+    try:
+        result = run_async(
+            _sync_usage(
+                repo_path,
+                since=since,
+                until=until,
+                include_sessions=include_sessions,
+                include_blocks=include_blocks,
+                use_npx=use_npx,
+                offline=not online,
+                timeout_seconds=timeout_seconds,
+            )
         )
-    )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
     if as_json:
         import json
 
@@ -152,6 +158,7 @@ async def _sync_usage(
     include_blocks: bool,
     use_npx: bool,
     offline: bool,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
     from provenant.core.persistence import (
         create_engine,
@@ -179,6 +186,7 @@ async def _sync_usage(
             include_blocks=include_blocks,
             use_npx=use_npx,
             offline=offline,
+            timeout_seconds=timeout_seconds,
         )
         return await save_usage_snapshot(session_factory, snapshot, repository_id=repo_id)
     finally:

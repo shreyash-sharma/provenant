@@ -67,7 +67,7 @@ def collect_ccusage(
     include_blocks: bool = False,
     use_npx: bool = False,
     offline: bool = True,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = 90,
 ) -> UsageSnapshot:
     """Collect and normalize ccusage reports."""
     runner = _resolve_runner(use_npx=use_npx)

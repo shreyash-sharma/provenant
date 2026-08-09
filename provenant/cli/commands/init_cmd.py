@@ -172,7 +172,15 @@ def _offer_ccusage_install(console_obj: Any) -> None:
         )
         return
 
-    if not click.confirm("  Install ccusage now?", default=False):
+    try:
+        install = click.confirm("  Install ccusage now?", default=False)
+    except (click.Abort, EOFError):
+        console_obj.print(
+            "  [dim]Skipped. Install later with `npm install -g ccusage`.[/dim]"
+        )
+        return
+
+    if not install:
         console_obj.print(
             "  [dim]Skipped. Install later with `npm install -g ccusage`.[/dim]"
         )
