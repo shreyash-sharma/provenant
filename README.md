@@ -4,14 +4,20 @@
 
 <h1 align="center">Provenant</h1>
 
-<p align="center">
-  <strong>Your coding agent does not need more context. It needs better context.</strong>
-</p>
+<h2 align="center">Microsoft Build AI 2026 National Winner</h2>
 
 <p align="center">
   <a href="https://internshala.com/competitions/microsoft-build-ai-2026/">
-    <img src="https://img.shields.io/badge/Microsoft%20Build%20AI%202026-National%20Winner%20%7C%201st%20Place-5E5E5E?logo=microsoft&logoColor=white" alt="Microsoft Build AI 2026 National Winner, 1st Place"/>
+    <img src="https://img.shields.io/badge/Microsoft%20Build%20AI%202026-National%201st%20Place-5E5E5E?logo=microsoft&logoColor=white" alt="Microsoft Build AI 2026 National 1st Place"/>
   </a>
+</p>
+
+<p align="center">
+  <strong>National 1st Place</strong> in Microsoft Build AI 2026 for codebase memory and retrieval for AI coding agents.
+</p>
+
+<p align="center">
+  <strong>Your coding agent does not need more context. It needs better context.</strong>
 </p>
 
 <p align="center">
