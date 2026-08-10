@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://internshala.com/competitions/microsoft-build-ai-2026/">
+    <img src="https://img.shields.io/badge/Microsoft%20Build%20AI%202026-National%20Winner%20%7C%201st%20Place-5E5E5E?logo=microsoft&logoColor=white" alt="Microsoft Build AI 2026 National Winner, 1st Place"/>
+  </a>
+</p>
+
+<p align="center">
   Local codebase memory for AI coding agents: cited retrieval, generated wiki pages,
   symbol context, git archaeology, dead-code signals, and risk-aware answers through MCP.
 </p>
@@ -55,6 +61,7 @@ Using a codebase memory layer for coding agents offers a range of benefits:
 - **Safer changes:** Surface risk, dependency centrality, dead-code signals, and likely blast radius.
 - **Architectural memory:** Answer "why does this code exist?" using git history and decision context.
 - **Self-improving retrieval:** Low-confidence answers can trigger background wiki repair.
+- **Usage telemetry:** Optional ccusage integration shows observed token and cost trends for Provenant-assisted agent sessions.
 - **Editor portability:** Use the same memory layer from any MCP-compatible coding agent.
 
 
@@ -90,7 +97,8 @@ pip install provenant
 
 ```bash
 provenant init ./myrepo        # index repo, generate wiki, build retrieval state
-provenant serve ./myrepo       # MCP server + local web dashboard
+provenant mcp ./myrepo         # MCP server for Claude Code, Cursor, Cline, and other agents
+provenant serve ./myrepo       # local web dashboard
 ```
 
 Use Provenant from Claude Code, Cursor, Windsurf, Cline, Copilot, or any MCP-compatible coding agent:
@@ -100,7 +108,7 @@ Use Provenant from Claude Code, Cursor, Windsurf, Cline, Copilot, or any MCP-com
   "mcpServers": {
     "provenant": {
       "command": "provenant",
-      "args": ["serve", "/path/to/repo"]
+      "args": ["mcp", "/path/to/repo"]
     }
   }
 }
@@ -197,6 +205,26 @@ provenant serve ./myrepo
 ```
 
 The local dashboard visualizes wiki pages, graph structure, dead-code findings, risk scores, repair candidates, and retrieval state. It is useful when you want to inspect the same memory layer your agent is querying.
+
+## Agent Usage Telemetry
+
+Provenant can import local coding-agent token and estimated cost data through ccusage, then correlate it with Provenant MCP tool activity.
+
+During `provenant init`, interactive terminals are offered an optional ccusage install:
+
+```bash
+npm install -g ccusage
+```
+
+If skipped, install it later and sync usage:
+
+```bash
+npm install -g ccusage
+provenant usage sync ./myrepo
+provenant usage report ./myrepo --by session
+```
+
+The dashboard Usage tab shows ccusage status, token and cost totals, model/agent/session breakdowns, and observed Provenant-assisted savings when enough local session data is available. If ccusage is missing, Provenant keeps the rest of the product working and shows the install command instead of empty telemetry.
 
 ## 🧩 Monorepos
 
